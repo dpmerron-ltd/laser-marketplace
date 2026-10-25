@@ -10,6 +10,8 @@ vi.mock('./storage/useBoxStock', () => ({ useBoxStock: () => ({ boxes: [], loadi
 
 const mock = vi.hoisted(() => ({
   userId: 'alice',
+  userEmail: '',
+  deleteItem: vi.fn(async (_id: string, _user: string) => {}),
   authChanged: undefined as undefined | ((event: string, session: unknown) => void),
   load: vi.fn(), loadItem: vi.fn(), save: vi.fn<(...args: unknown[]) => Promise<{ ok: boolean }>>(async () => ({ ok: true })),
   programs: vi.fn(), savePrograms: vi.fn(),
@@ -19,10 +21,10 @@ vi.mock('./storage/supabaseClient', () => ({
   supabaseUrl: 'https://test.supabase.co',
   supabase: {
     auth: {
-      getSession: async () => ({ data: { session: { user: { id: mock.userId, email: `${mock.userId}@example.com` } } } }),
+      getSession: async () => ({ data: { session: { user: { id: mock.userId, email: mock.userEmail || `${mock.userId}@example.com` } } } }),
       onAuthStateChange: (callback: (event: string, session: unknown) => void) => {
         mock.authChanged = callback
-        queueMicrotask(() => callback('INITIAL_SESSION', { user: { id: mock.userId, email: `${mock.userId}@example.com` } }))
+        queueMicrotask(() => callback('INITIAL_SESSION', { user: { id: mock.userId, email: mock.userEmail || `${mock.userId}@example.com` } }))
         return { data: { subscription: { unsubscribe: () => { mock.authChanged = undefined } } } }
       },
       mfa: {
@@ -37,6 +39,7 @@ vi.mock('./storage/supabaseProjectStore', () => ({
   loadRemoteProject: (...args: unknown[]) => mock.load(...args),
   loadRemoteItemComponents: (...args: unknown[]) => mock.loadItem(...args),
   saveRemoteProject: (...args: unknown[]) => mock.save(...args),
+  deleteRemoteItem: (...args: [string, string]) => mock.deleteItem(...args),
   deleteRemoteComponent: vi.fn(), deleteRemoteSheetHistory: vi.fn(), saveRemoteSheetHistory: vi.fn(async () => ({ ok: true })),
   saveRemoteComponent: vi.fn(async () => ({ ok: true })),
 }))
@@ -70,8 +73,55 @@ async function openSheet() {
 }
 
 describe('account switching', () => {
-  beforeEach(() => { localStorage.clear(); mock.userId = 'alice'; mock.load.mockReset(); mock.loadItem.mockReset().mockResolvedValue([]); mock.save.mockClear(); mock.download.mockReset(); mock.programs.mockReset().mockResolvedValue(defaultProgramSettings); mock.savePrograms.mockReset().mockImplementation(async (_owner, value) => value) })
+  beforeEach(() => { localStorage.clear(); mock.userId = 'alice'; mock.userEmail = ''; mock.deleteItem.mockReset().mockResolvedValue(undefined); mock.load.mockReset(); mock.loadItem.mockReset().mockResolvedValue([]); mock.save.mockClear(); mock.download.mockReset(); mock.programs.mockReset().mockResolvedValue(defaultProgramSettings); mock.savePrograms.mockReset().mockImplementation(async (_owner, value) => value) })
   afterEach(cleanup)
+  it('lets Dan delete another creator’s item, clearing the catalogue only after success', async () => {
+    mock.userId = 'dan'
+    mock.userEmail = 'dan@dpmerron.co.uk'
+    const { remote, components } = lazyLibrary()
+    mock.load.mockResolvedValue(remote)
+    mock.loadItem.mockImplementation(async item => components.filter(part => part.itemId === item.id))
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: "Open alice's private item" }))
+    await screen.findByRole('heading', { name: 'Panel 0' })
+    mock.deleteItem.mockRejectedValueOnce(new Error('Network unavailable'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete item' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Network unavailable')
+    expect(screen.getByRole('heading', { name: 'Panel 0' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete item' }))
+    await screen.findByRole('button', { name: 'Open Second item' })
+    expect(mock.deleteItem).toHaveBeenLastCalledWith('alice-item', 'dan')
+    expect(screen.queryByRole('button', { name: "Open alice's private item" })).not.toBeInTheDocument()
+    expect(screen.getByText(/^1 items.*1 components/)).toBeInTheDocument()
+    await waitFor(() => expect(mock.save).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ id: 'alice-second' })], [], expect.anything(), 'alice-second', 'dan',
+    ))
+    confirm.mockRestore()
+  })
+
+  it('hides item deletion from other users and blocks Dan while components are placed', async () => {
+    const { remote, components } = lazyLibrary()
+    mock.load.mockResolvedValue(remote)
+    mock.loadItem.mockImplementation(async item => components.filter(part => part.itemId === item.id))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: "Open alice's private item" }))
+    expect(screen.queryByRole('button', { name: 'Delete item' })).not.toBeInTheDocument()
+    cleanup()
+    mock.userId = 'dan'
+    mock.userEmail = 'dan@dpmerron.co.uk'
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: "Open alice's private item" }))
+    await screen.findByRole('heading', { name: 'Panel 0' })
+    fireEvent.click(screen.getByRole('button', { name: 'Add all to sheet' }))
+    await screen.findByText("1 components from alice's private item added to the sheet.")
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete item' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Remove this item’s components from the sheet before deleting it.')
+    expect(mock.deleteItem).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+
   it('opens and edits a shared item and adds its components to another user’s sheet', async () => {
     mock.userId = 'bob'
     const { remote, components } = lazyLibrary()

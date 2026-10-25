@@ -1,7 +1,7 @@
 import type { Project } from '../models/Project'
 import { privateProject } from './accountProject'
 
-const storageKey = 'sheet-builder-project'
+const storageKey = 'laser-marketplace-project'
 
 export function saveProject(project: Project, userId: string | undefined): boolean {
   if (!userId) return false

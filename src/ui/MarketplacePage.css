@@ -71,6 +71,7 @@
   .items-actions { flex-shrink: 1; }
 }
 
+.items-detail-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
 .items-version-bar { display: flex; align-items: end; flex-wrap: wrap; gap: 16px; margin-bottom: 22px; }
 .items-version-bar label { display: grid; gap: 6px; font-size: 12px; max-width: 100%; }
 .items-version-bar select { min-width: 180px; max-width: 100%; }

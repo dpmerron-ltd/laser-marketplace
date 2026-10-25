@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Sheet } from '../models/Sheet'
-import { loadRemoteItemComponents, loadRemoteProject, saveRemoteComponent, saveRemoteItemImage, saveRemoteProject, saveRemoteSheetHistory } from './supabaseProjectStore'
+import { deleteRemoteItem, loadRemoteItemComponents, loadRemoteProject, saveRemoteComponent, saveRemoteItemImage, saveRemoteProject, saveRemoteSheetHistory } from './supabaseProjectStore'
 import { testParts } from '../test/jobFixtures'
 import { testImage } from '../test/imageFixture'
 import { materialProfiles, materialVariantsSchema } from '../cam/materialProfiles'
@@ -30,6 +30,7 @@ vi.mock('./supabaseClient', () => ({
         range: (from: number, to: number) => { query.range = [from, to]; return builder },
         maybeSingle: () => builder,
         single: () => builder,
+        delete: () => { query.write = { deleted: true }; return builder },
         update: (value: unknown) => { query.write = value; return builder },
         upsert: (value: unknown, options?: unknown) => { query.write = value; query.options = options; return builder },
         then: (resolve: (value: unknown) => unknown) => {
@@ -50,6 +51,24 @@ const sheet: Sheet = { name: '', width: 100, height: 100, spacing: 10, borderSpa
 describe('cloud account boundaries', () => {
   beforeEach(async () => { mock.queries = []; mock.userId = 'alice'; mock.conflict = false; mock.error = null; mock.rows = []; mock.components = []; mock.project = null; mock.history = []; mock.failOffset = undefined; await loadRemoteProject('alice'); mock.queries = [] })
 
+  it('reports delete failures, rejects changed accounts and prevents stale autosaves restoring deleted items', async () => {
+    const item = { id: 'delete-target', ownerId: 'alice', name: 'Target', sku: 'T', description: '', createdAt: '', updatedAt: '' }
+    await expect(deleteRemoteItem(item.id, 'bob')).rejects.toThrow('account changed')
+    expect(mock.queries).toEqual([])
+    mock.error = { message: 'Permission denied' }
+    await expect(deleteRemoteItem(item.id, 'alice')).rejects.toThrow('Permission denied')
+    mock.error = null
+    const deleting = deleteRemoteItem(item.id, 'alice')
+    const saving = saveRemoteProject([item], [{ ...testParts[0], itemId: item.id, ownerId: 'alice' }], sheet, item.id, 'alice')
+    await deleting
+    expect(await saving).toEqual({ ok: true })
+    expect(mock.queries.filter(query => query.table === 'marketplace_items')).toEqual([
+      expect.objectContaining({ write: { deleted: true }, filters: [['id', item.id]] }),
+      expect.objectContaining({ write: { deleted: true }, filters: [['id', item.id]] }),
+    ])
+    expect(mock.queries.some(query => query.table === 'cnc_components')).toBe(false)
+    expect(mock.queries.at(-1)?.write).toMatchObject({ selected_item_id: null })
+  })
   it('loads a shared item and components from different creators through bounded program pages', async () => {
     const item = { id: 'target', ownerId: 'bob', sku: 'T', name: 'Target', description: '', createdAt: '', updatedAt: '' }
     mock.components = Array.from({ length: 61 }, (_, index) => ({ id: `p-${index}`, owner_id: 'alice', item_id: 'target', sku: `T-${index}`, name: `Panel ${index}`, original_filename: 'panel.nc', gcode: testParts[0].gcode }))

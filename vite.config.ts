@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: '/cnc-marketplace/',
+  base: '/laser-marketplace/',
   plugins: [react()],
   test: {
     environment: 'jsdom',

@@ -42,6 +42,18 @@ alter table public.cnc_order_assignment_history enable row level security;
 revoke all on public.cnc_order_admin, public.cnc_order_assignments, public.cnc_order_assignment_history from public, anon, authenticated;
 grant select on public.cnc_order_admin to service_role;
 
+-- The same pinned Dan account may delete items from the shared catalogue.
+create or replace function public.can_delete_marketplace_items()
+returns boolean language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.cnc_order_admin where user_id = auth.uid())
+$$;
+revoke all on function public.can_delete_marketplace_items() from public;
+grant execute on function public.can_delete_marketplace_items() to authenticated, anon;
+drop policy if exists "catalogue item deletion guard" on public.marketplace_items;
+create policy "catalogue item deletion guard"
+  on public.marketplace_items as restrictive for delete
+  using (public.can_delete_marketplace_items());
+
 create or replace function public.cnc_order_users(p_actor uuid, p_offset integer default 0)
 returns table(id uuid, email text) language plpgsql security definer set search_path = '' as $$
 begin

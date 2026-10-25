@@ -270,6 +270,7 @@ export async function loadRemoteItemComponents(item: MarketplaceItem, expectedUs
 
 // Snapshots are per login; only changed metadata is written. Sheet autosaves
 // must not replace another user's newer catalogue edits with their cached copy.
+const deletedItemIds = new Set<string>()
 const catalogueSnapshots = new Map<string, Map<string, MarketplaceItem>>()
 function editableMetadata(item: MarketplaceItem) {
   return { sku: item.sku, name: item.name, description: item.description, packing: item.packing ?? {} }
@@ -313,6 +314,7 @@ export function saveCatalogueItem(item: MarketplaceItem, userId: string): Promis
 async function persistCatalogueItem(item: MarketplaceItem, userId: string): Promise<RemoteSaveResult> {
   if (await getUserId() !== userId) return { ok: false, error: 'The signed-in account changed. Please reload.' }
 
+  if (deletedItemIds.has(item.id)) return { ok: true }
   const snapshots = catalogueSnapshots.get(userId) ?? new Map<string, MarketplaceItem>()
   catalogueSnapshots.set(userId, snapshots)
   const previous = snapshots.get(item.id)
@@ -350,6 +352,8 @@ async function persistRemoteProject(items: MarketplaceItem[], parts: Part[], she
   const userId = await getUserId()
   if (!userId || userId !== expectedUserId) return { ok: false, error: 'The signed-in account changed. Please reload.' }
 
+  items = items.filter(item => !deletedItemIds.has(item.id))
+  parts = parts.filter(part => !deletedItemIds.has(part.itemId ?? ''))
   const itemIds = new Set(items.map(item => item.id))
   if (parts.some(part => !itemIds.has(part.itemId ?? ''))) return { ok: false, error: 'A component is missing its catalogue item.' }
   // Existing shared programs are never rewritten by sheet autosave.
@@ -386,6 +390,21 @@ async function persistRemoteProject(items: MarketplaceItem[], parts: Part[], she
   }
 
   return { ok: true }
+}
+
+// Serialize deletion with autosaves, and ignore stale queued snapshots afterwards.
+export function deleteRemoteItem(itemId: string, expectedUserId: string): Promise<void> {
+  const next = projectSaveQueue.then(async () => {
+    await catalogueWriteQueue
+    if (!supabase) throw new Error('Supabase is not configured.')
+    if (await getUserId() !== expectedUserId) throw new Error('The signed-in account changed. Please reload.')
+    const result = await supabase.from('marketplace_items').delete().eq('id', itemId).select('id').single()
+    if (result.error) throw new Error(result.error.message)
+    if (!result.data) throw new Error('The item could not be deleted. Check your permissions and reload the catalogue.')
+    deletedItemIds.add(itemId)
+  })
+  projectSaveQueue = next.then(() => ({ ok: true }), error => ({ ok: false, error: String(error) }))
+  return next
 }
 
 export async function deleteRemoteComponent(partId: string, expectedUserId?: string, itemId?: string): Promise<void> {

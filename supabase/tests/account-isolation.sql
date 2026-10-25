@@ -104,6 +104,31 @@ begin
   if (select count(*) from public.cnc_components) <> 1 then raise exception 'Shared component deletion failed'; end if;
 end $$;
 
+-- Ordinary users cannot delete catalogue items, even with a legacy allow policy.
+reset role;
+create policy "test legacy shared delete" on public.marketplace_items for delete using (true);
+set local role authenticated;
+do $$
+declare affected integer;
+begin
+  delete from public.marketplace_items;
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'Non-admin deleted shared items'; end if;
+end $$;
+set local request.jwt.claim.sub = '00000000-0000-4000-8000-000000000009';
+do $$
+begin
+  delete from public.marketplace_items where id = '10000000-0000-4000-8000-000000000001';
+  if exists (select 1 from public.marketplace_items) then raise exception 'Dan could not delete another creator item'; end if;
+  if exists (select 1 from public.cnc_components) then raise exception 'Item components were not deleted'; end if;
+end $$;
+reset role;
+do $$
+begin
+  if exists (select 1 from public.sheet_projects where selected_item_id is not null) then raise exception 'Deleted item selection remains'; end if;
+  if (select count(*) from public.sheet_projects) <> 2 then raise exception 'Deletion removed private sheets'; end if;
+end $$;
+
 set local role anon;
 set local request.jwt.claim.sub = '';
 do $$

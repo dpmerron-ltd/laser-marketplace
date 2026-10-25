@@ -41,14 +41,14 @@ describe('account-local projects', () => {
   it('never overwrites a complete browser backup with a partially loaded catalogue', () => {
     const original = fixture()
     expect(saveProject(original, 'alice')).toBe(true)
-    const before = localStorage.getItem('sheet-builder-project:alice')
+    const before = localStorage.getItem('laser-marketplace-project:alice')
     expect(saveProject({ ...original, parts: [], componentIndex: original.parts.map(summarizePart) }, 'alice')).toBe(false)
-    expect(localStorage.getItem('sheet-builder-project:alice')).toBe(before)
+    expect(localStorage.getItem('laser-marketplace-project:alice')).toBe(before)
   })
 
   it('keeps browser backups separate and ignores the old shared cache', () => {
     const project = fixture()
-    localStorage.setItem('sheet-builder-project', JSON.stringify(project))
+    localStorage.setItem('laser-marketplace-project', JSON.stringify(project))
     expect(loadProject('alice')).toBeUndefined()
     expect(loadProject(undefined)).toBeUndefined()
     expect(saveProject(project, undefined)).toBe(false)

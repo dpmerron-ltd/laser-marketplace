@@ -20,6 +20,27 @@ function setup() {
 }
 
 describe('item library grid', () => {
+  it('only offers item deletion when authorized, confirms it and keeps failures visible', async () => {
+    const callbacks = setup()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Alpha cabinet' }))
+    expect(screen.queryByRole('button', { name: 'Delete item' })).not.toBeInTheDocument()
+    let finish!: () => void
+    const onDeleteItem = vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error('Permission denied')).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    callbacks.rerender(<MarketplacePage items={items} parts={parts} currentUserId="dan" {...callbacks} onDeleteItem={onDeleteItem} />)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete item' }))
+    expect(onDeleteItem).not.toHaveBeenCalled()
+    confirm.mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete item' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied')
+    expect(screen.getByLabelText('Item name')).toHaveValue('Alpha cabinet')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete item' }))
+    expect(screen.getByRole('button', { name: 'Deleting item...' })).toBeDisabled()
+    expect(screen.getByLabelText('Item name')).toBeDisabled()
+    expect(onDeleteItem).toHaveBeenLastCalledWith('a')
+    finish()
+    expect(await screen.findByRole('heading', { name: 'Items' })).toBeInTheDocument()
+  })
   it('shows item images in the grid, with upload controls for a newly created item', () => {
     const callbacks = setup()
     callbacks.rerender(<MarketplacePage items={[{ ...items[0], image: testImage }, ...items.slice(1)]} parts={parts} currentUserId="alice" {...callbacks} />)

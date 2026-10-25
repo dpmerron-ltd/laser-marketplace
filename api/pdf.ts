@@ -13,7 +13,7 @@ async function document(fontBytes: Uint8Array, title: string) {
   pdf.registerFontkit(fontkit)
   const font = await pdf.embedFont(fontBytes, { subset: true })
   pdf.setTitle(title)
-  pdf.setCreator('CNC Marketplace Jobs API v1')
+  pdf.setCreator('Laser Marketplace Jobs API v1')
   return { pdf, font }
 }
 

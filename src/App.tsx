@@ -41,6 +41,7 @@ import { supabase } from './storage/supabaseClient'
 import {
   canUseSupabase,
   deleteRemoteComponent,
+  deleteRemoteItem,
   deleteRemoteSheetHistory,
   loadRemoteProject,
   loadRemoteItemComponents,
@@ -986,6 +987,32 @@ function App() {
     if (accountRef.current !== userId) return
   }
 
+  async function deleteMarketplaceItem(itemId: string) {
+    const item = items.find(value => value.id === itemId)
+    if (!item || !canEditItem(item) || !userId || accountRef.current !== userId || userEmail?.toLowerCase() !== 'dan@dpmerron.co.uk') throw new Error('Only Dan can delete items.')
+    const componentIds = new Set(catalogueComponents.filter(part => part.itemId === itemId).map(part => part.id))
+    if (sheet.instances.some(instance => componentIds.has(instance.partId))) throw new Error('Remove this item’s components from the sheet before deleting it.')
+    if (componentSaves.jobs.some(job => job.part?.itemId === itemId && job.status !== 'saved')) throw new Error('Finish saving this item’s queued components before deleting it.')
+    await deleteRemoteItem(itemId, userId)
+    if (accountRef.current !== userId) return
+    const current = orderSheetInputs.current
+    const remainingItems = current.items.filter(value => value.id !== itemId)
+    const remainingParts = current.parts.filter(part => part.itemId !== itemId)
+    const remainingIndex = current.componentIndex.filter(part => part.itemId !== itemId)
+    const removedIds = new Set([...componentIds, ...current.parts.filter(part => part.itemId === itemId).map(part => part.id)])
+    const remainingSheet = numberSheetParts({ ...current.sheet, instances: current.sheet.instances.filter(instance => !removedIds.has(instance.partId)) })
+    resetComponentLoading(remainingItems, [...loadedItems.current].filter(id => id !== itemId))
+    orderSheetInputs.current = { items: remainingItems, parts: remainingParts, componentIndex: remainingIndex, sheet: remainingSheet }
+    setItems(remainingItems)
+    setParts(remainingParts)
+    setComponentIndex(remainingIndex)
+    setSheet(remainingSheet)
+    for (const id of removedIds) persistedComponentIds.current.delete(id)
+    setSelectedItemId(current => current === itemId ? remainingItems[0]?.id : current)
+    setSelectedPartId(current => current && removedIds.has(current) ? undefined : current)
+    setStatus(`Deleted ${item.name} and its components.`)
+  }
+
   async function deleteComponent(partId: string) {
     const part = parts.find((candidate) => candidate.id === partId)
     const item = part?.itemId ? items.find((candidate) => candidate.id === part.itemId) : undefined
@@ -1111,7 +1138,7 @@ function App() {
       if (componentEpoch.current !== epoch || accountRef.current !== userId) throw new Error('Your account or catalogue changed. Export cancelled.')
       const latest = orderSheetInputs.current
       if (latest.items !== initial.items || latest.sheet !== initial.sheet) throw new Error('Your sheet or items changed while loading. Export again to include those changes.')
-      downloadText('sheet-builder-project.json', JSON.stringify({ ...buildProject(), parts: latest.parts, componentIndex: undefined }, null, 2), 'application/json')
+      downloadText('laser-marketplace-project.json', JSON.stringify({ ...buildProject(), parts: latest.parts, componentIndex: undefined }, null, 2), 'application/json')
       setStatus('Exported complete project.')
     } catch (error) { if (componentEpoch.current === epoch) setStatus(`Project export failed: ${errorMessage(error)}`) }
     finally { if (componentEpoch.current === epoch) setExportingProject(false) }
@@ -1367,6 +1394,16 @@ function App() {
     return <main className="login-shell"><div className="login-panel">Loading...</div></main>
   }
 
+  if (!supabase) {
+    return <main className="login-shell"><div className="login-panel">
+      <h1>Laser Marketplace</h1>
+      <p>A dedicated project for laser cut file generation.</p>
+      <h2>Connect your project</h2>
+      <p>Follow the README to configure this project's Supabase connection, then restart the app to use the catalogue.</p>
+      <p>This fork currently includes the inherited CNC generator. Laser-specific exports are the next development step.</p>
+    </div></main>
+  }
+
   if (!userEmail) {
     return <LoginPage onLogin={login} />
   }
@@ -1402,7 +1439,7 @@ function App() {
     <div className={`app${page === 'machine' ? ' machine-mode' : ''}`}>
       <header className="toolbar">
         <div className="brand-block">
-          <h1>CNC Marketplace</h1>
+          <h1>Laser Marketplace</h1>
           <span>{userEmail}</span>
         </div>
         <nav className="nav-tabs" aria-label="Primary">
@@ -1506,6 +1543,7 @@ function App() {
           onUpdateItem={updateMarketplaceItem}
           onSaveImage={updateItemImage}
           onImportComponents={(itemId, files) => void importFilesForItem(itemId, files)}
+          onDeleteItem={userEmail?.toLowerCase() === 'dan@dpmerron.co.uk' ? deleteMarketplaceItem : undefined}
           onDeleteComponent={deleteComponent}
           onAddToSheet={addPart}
           onAddItemToSheet={addAllItemComponents}

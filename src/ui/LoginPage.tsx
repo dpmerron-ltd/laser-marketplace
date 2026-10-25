@@ -23,7 +23,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   return (
     <main className="login-shell">
       <form className="login-panel" onSubmit={(event) => void submit(event)}>
-        <h1>CNC Marketplace</h1>
+        <h1>Laser Marketplace</h1>
         <label>
           Username
           <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />

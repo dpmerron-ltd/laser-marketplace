@@ -22,7 +22,7 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           test -n "$SUPABASE_DB_URL"
-          if echo "$SUPABASE_DB_URL" | grep -q "db\.bsnndtwbvgrthddmbhoa\.supabase\.co"; then
+          if echo "$SUPABASE_DB_URL" | grep -Eq "db\.[^.]+\.supabase\.co"; then
             echo "SUPABASE_DB_URL is using the direct database host, which can be IPv6-only from GitHub Actions."
             echo "Use the Supabase Session pooler connection string instead."
             exit 1

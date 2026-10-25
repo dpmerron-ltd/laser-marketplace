@@ -1,4 +1,4 @@
-project_id = "cnc-marketplace"
+project_id = "laser-marketplace"
 
 [functions.cnc-api]
 # Every non-OPTIONS request is authenticated inside the handler (account API key or verified MFA JWT).

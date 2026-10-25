@@ -26,6 +26,7 @@ interface MarketplacePageProps {
   onUpdateItem: (itemId: string, patch: Partial<MarketplaceItem>) => void
   onSaveImage: (itemId: string, image: ItemImage | null) => Promise<void>
   onImportComponents: (itemId: string, files: FileList) => void
+  onDeleteItem?: (itemId: string) => Promise<void>
   onDeleteComponent: (partId: string) => void
   onAddToSheet: (partId: string) => void
   onAddItemToSheet: (itemId: string) => number | Promise<number>
@@ -37,7 +38,7 @@ function dateLabel(value: string): string {
   return Number.isNaN(date.getTime()) ? 'Not recorded' : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-export function MarketplacePage({ items, parts, componentIndex, componentLoads, onLoadComponents, currentUserId, onCreateItem, onSelectItem, onUpdateItem, onSaveImage, onImportComponents, onDeleteComponent, onAddToSheet, onAddItemToSheet, onOpenSheet }: MarketplacePageProps) {
+export function MarketplacePage({ items, parts, componentIndex, componentLoads, onLoadComponents, currentUserId, onCreateItem, onSelectItem, onUpdateItem, onSaveImage, onImportComponents, onDeleteItem, onDeleteComponent, onAddToSheet, onAddItemToSheet, onOpenSheet }: MarketplacePageProps) {
   const [detailId, setDetailId] = useState<string>()
   const [followDefault, setFollowDefault] = useState(true)
   const [query, setQuery] = useState('')
@@ -47,6 +48,8 @@ export function MarketplacePage({ items, parts, componentIndex, componentLoads, 
   const [added, setAdded] = useState<string>()
   const [addError, setAddError] = useState('')
   const [adding, setAdding] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
   const sharedItems = useMemo(() => currentUserId ? catalogueItems(items) : [], [items, currentUserId])
   const partsByItem = useMemo(() => {
     const map = new Map<string, ComponentSummary[]>()
@@ -91,6 +94,7 @@ export function MarketplacePage({ items, parts, componentIndex, componentLoads, 
     setComponentQuery('')
     setAdded(undefined)
     setAddError('')
+    setDeleteError('')
     void onLoadComponents?.(id).catch(() => {})
   }
 
@@ -100,14 +104,22 @@ export function MarketplacePage({ items, parts, componentIndex, componentLoads, 
       <header className="items-heading">
         <div><h2>{selectedItem.name || 'Untitled item'}</h2><p>{selectedItem.sku} <span aria-hidden="true">/</span> {selectedCount} components</p></div>
         <div className="items-actions">
-          <button type="button" disabled={adding || !componentsReady || !selectedParts.length} onClick={async () => {
+          {onDeleteItem && !selectedItem.version && <button type="button" className="danger" disabled={deleting || adding} onClick={async () => {
+            if (!window.confirm(`Delete "${selectedItem.name || 'Untitled item'}" and all ${selectedCount} components? This removes them from the shared catalogue for everyone and cannot be undone.`)) return
+            setDeleteError(''); setDeleting(true)
+            try { await onDeleteItem(selectedItem.id); setDetailId(undefined) }
+            catch (error) { setDeleteError(error instanceof Error ? error.message : 'The item could not be deleted.') }
+            finally { setDeleting(false) }
+          }}><Trash2 size={16} /> {deleting ? 'Deleting item...' : 'Delete item'}</button>}
+
+          <button type="button" disabled={deleting || adding || !componentsReady || !selectedParts.length} onClick={async () => {
             setAddError(''); setAdding(true)
             try { const count = await onAddItemToSheet(selectedItem.id); setAdded(`${count} components from ${selectedItem.name}`) }
             catch (error) { setAdded(undefined); setAddError(error instanceof Error ? error.message : 'The item could not be added.') }
             finally { setAdding(false) }
           }}><Plus size={16} /> {adding ? 'Adding components...' : 'Add all to sheet'}</button>
           <button type="button" onClick={onOpenSheet}>Open sheet <ArrowRight size={16} /></button>
-          {editable && <label className="file-button items-upload"><FileUp size={16} /> Upload components<input aria-label="Upload components" disabled={!componentsReady} type="file" multiple accept=".nc,.tap,.gcode,.cnc,.dxf" onChange={event => {
+          {editable && <label className="file-button items-upload"><FileUp size={16} /> Upload components<input aria-label="Upload components" disabled={deleting || !componentsReady} type="file" multiple accept=".nc,.tap,.gcode,.cnc,.dxf" onChange={event => {
             if (event.target.files?.length) onImportComponents(selectedItem.id, event.target.files)
             event.currentTarget.value = ''
           }} /></label>}
@@ -117,6 +129,8 @@ export function MarketplacePage({ items, parts, componentIndex, componentLoads, 
         <label>Version<select aria-label="Item version" value={selectedItem.id} onChange={event => openItem(event.target.value)}>{revisions.map(item => <option key={item.id} value={item.id}>{versionLabel(item)}</option>)}</select></label>
         {selectedItem.version?.publishedAt && <span>Published {dateLabel(selectedItem.version.publishedAt)}</span>}
       </div>
+      {deleteError && <p role="alert">{deleteError}</p>}
+      <fieldset disabled={deleting} className="items-detail-fields">
       <section className="items-metadata" aria-label="Item details">
         <label>Item name<input readOnly={!editable} value={selectedItem.name} onChange={event => onUpdateItem(selectedItem.id, { name: event.target.value })} /></label>
         <label>SKU<input readOnly={!editable} value={selectedItem.sku} onChange={event => onUpdateItem(selectedItem.id, { sku: event.target.value.toUpperCase() })} /></label>
@@ -138,6 +152,7 @@ export function MarketplacePage({ items, parts, componentIndex, componentLoads, 
           }}><Trash2 size={16} /></button>}</div>
         </article>)}
       </div> : <div className="items-empty"><Package size={32} /><h3>{selectedParts.length ? 'No matching components' : 'No components yet'}</h3>{componentQuery && <button type="button" onClick={() => setComponentQuery('')}>Clear search</button>}</div>}
+      </fieldset>
     </> : <>
       <header className="items-heading"><div><h2>Items</h2><p>{sharedItems.length} items <span aria-hidden="true">/</span> {sharedItems.reduce((sum, item) => sum + (partsByItem.get(item.id)?.length ?? 0), 0)} components</p></div><button type="button" className="primary" onClick={() => openItem(onCreateItem())}><Plus size={17} /> New item</button></header>
       <div className="items-controls">

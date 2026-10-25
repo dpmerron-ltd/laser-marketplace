@@ -14,7 +14,7 @@ export async function createTabMapPdf(map: TabMap, fontBytes: Uint8Array): Promi
   const content = [map.name, map.order, ...map.parts.flatMap(part => [part.name, ...part.tabs.map(tab => tab.operation)])].join('')
   if (Array.from(content).some(char => !/\s/.test(char) && !supported.has(char.codePointAt(0)!))) throw new Error('Tab map text contains characters unsupported by the PDF font.')
   pdf.setTitle(`${map.name} - Tab removal map`)
-  pdf.setCreator('CNC Marketplace')
+  pdf.setCreator('Laser Marketplace')
   const clean = (value: string) => value.replace(/\s+/g, ' ').trim()
   function text(page: PDFPage, value: string, x: number, y: number, size = 9, width = 523) {
     let label = clean(value)

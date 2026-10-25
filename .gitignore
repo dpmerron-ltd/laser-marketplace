@@ -29,3 +29,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Local laser workshop artifacts and queue
+.workshop/
+dist-workshop/

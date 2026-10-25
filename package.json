@@ -11,7 +11,9 @@
     "audit:gcode": "node scripts/audit-gcode.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:workshop": "tsc -p tsconfig.workshop.json && node scripts/build-workshop.mjs",
+    "workshop": "npm run build:workshop && node dist-workshop/server.mjs"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",

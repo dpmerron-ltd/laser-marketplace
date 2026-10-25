@@ -9,22 +9,22 @@ type Entity = IEntity & { vertices?: Vertex[]; center?: Vertex; position?: Verte
 const supported = new Set(['LINE', 'ARC', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'POINT'])
 const annotations = new Set(['TEXT', 'MTEXT', 'DIMENSION'])
 
-function polyline(vertices: Vertex[], closed: boolean): Point[] {
+function polyline(vertices: Vertex[], closed: boolean, unitFactor: number): Point[] {
   const result: Point[] = []
   for (let i = 0; i < vertices.length; i++) {
     const a = vertices[i], b = vertices[(i + 1) % vertices.length]
     result.push({ x: a.x, y: a.y })
     if ((!closed && i === vertices.length - 1) || !a.bulge) continue
     const chord = distance(a, b), bulge = a.bulge
-    if (chord < 0.001) throw new Error('Zero-length bulged segment.')
+    if (chord * unitFactor < 0.001) throw new Error('Zero-length bulged segment.')
     const center = { x: (a.x + b.x) / 2 - (b.y - a.y) * (1 - bulge * bulge) / (4 * bulge), y: (a.y + b.y) / 2 + (b.x - a.x) * (1 - bulge * bulge) / (4 * bulge) }
-    const sampled = arcPoints(center, chord * (1 + bulge * bulge) / (4 * Math.abs(bulge)), Math.atan2(a.y - center.y, a.x - center.x), 4 * Math.atan(bulge))
+    const sampled = arcPoints(center, chord * (1 + bulge * bulge) / (4 * Math.abs(bulge)), Math.atan2(a.y - center.y, a.x - center.x), 4 * Math.atan(bulge), 0.02 / unitFactor)
     result.push(...sampled.slice(1, -1))
   }
   return result
 }
 
-export function readDxf(source: string, selectedUnits: 'auto' | 'mm' | 'inches' = 'auto'): CamDrawing {
+export function readDxf(source: string, selectedUnits: 'auto' | 'mm' | 'inches' = 'auto', toleranceUnits: 'drawing' | 'mm' = 'drawing'): CamDrawing {
   if (source.length > 2000000) throw new Error('DXF exceeds 2 MB.')
   if (source.startsWith('AutoCAD Binary DXF')) throw new Error('Use an ASCII DXF export.')
   const warnings: string[] = [], errors: string[] = []
@@ -41,9 +41,10 @@ export function readDxf(source: string, selectedUnits: 'auto' | 'mm' | 'inches' 
   const dxf = new DxfParser().parseSync(source)
   if (!dxf) throw new Error('DXF could not be read.')
   if (dxf.entities.length > 1000) throw new Error('DXF exceeds 1,000 entities. Split the drawing.')
-  const unitCode = Number(dxf.header.$INSUNITS ?? 0)
+  const unitCode = Number(dxf.header?.$INSUNITS ?? 0)
   const units = unitCode === 4 ? 'mm' : unitCode === 1 ? 'inches' : 'unknown'
   const unitFactor = (selectedUnits === 'auto' ? units : selectedUnits) === 'inches' ? 25.4 : 1
+  const geometryFactor = toleranceUnits === 'mm' ? unitFactor : 1
   if (unitCode && units === 'unknown') errors.push(`DXF unit code ${unitCode} is unsupported. Export in millimetres or inches.`)
   if (!unitCode) warnings.push('DXF units are unspecified. Confirm the drawing units and dimensions.')
   const features: CamFeature[] = []
@@ -62,7 +63,7 @@ export function readDxf(source: string, selectedUnits: 'auto' | 'mm' | 'inches' 
       if (e.type === 'CIRCLE') {
         if (!e.center || !e.radius) throw new Error('Invalid circle.')
         circle = { center: { x: e.center.x, y: e.center.y }, radius: e.radius }
-        points = arcPoints(e.center, e.radius, 0, Math.PI * 2).slice(0, -1); closed = true
+        points = arcPoints(e.center, e.radius, 0, Math.PI * 2, 0.02 / geometryFactor).slice(0, -1); closed = true
       } else if (e.type === 'POINT') {
         if (!e.position) throw new Error('Invalid drill point.')
         points = [e.position]
@@ -70,15 +71,15 @@ export function readDxf(source: string, selectedUnits: 'auto' | 'mm' | 'inches' 
         if (!e.center || !e.radius || e.startAngle === undefined || e.endAngle === undefined) throw new Error('Invalid arc.')
         const sweep = ((e.endAngle - e.startAngle) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)
         if (!sweep) throw new Error('Zero-length arc.')
-        points = arcPoints(e.center, e.radius, e.startAngle, sweep)
+        points = arcPoints(e.center, e.radius, e.startAngle, sweep, 0.02 / geometryFactor)
       } else {
         if (vertices.length < 2) throw new Error('Not enough vertices.')
         closed = Boolean(e.shape)
-        points = polyline(vertices, closed)
+        points = polyline(vertices, closed, geometryFactor)
       }
       if (points.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || Math.abs(p.x) > 100000 || Math.abs(p.y) > 100000)) throw new Error('Invalid or excessive coordinates.')
       points = points.filter((p, i) => !i || distance(p, points[i - 1]) > 1e-7)
-      if (points.length > 2 && distance(points[0], points.at(-1)!) < 0.01) { points.pop(); closed = true }
+      if (points.length > 2 && distance(points[0], points.at(-1)!) < 0.01 / geometryFactor) { points.pop(); closed = true }
       if (!closed && points.length > 1) chains.push({ points, layer })
       else features.push({ id: `f${index}`, name: label, layer, points, closed, circle, kind: e.type === 'POINT' ? 'drill' : 'unassigned' })
     } catch (error) { errors.push(`${label}: ${(error as Error).message}`) }
@@ -88,20 +89,20 @@ export function readDxf(source: string, selectedUnits: 'auto' | 'mm' | 'inches' 
     let closed = false
     while (!closed) {
       const matches = chains.flatMap((candidate, index) => candidate.layer !== chain.layer ? [] : [
-        ...(distance(chain.points.at(-1)!, candidate.points[0]) < 0.01 ? [{ index, reverse: false }] : []),
-        ...(distance(chain.points.at(-1)!, candidate.points.at(-1)!) < 0.01 ? [{ index, reverse: true }] : []),
+        ...(distance(chain.points.at(-1)!, candidate.points[0]) < 0.01 / geometryFactor ? [{ index, reverse: false }] : []),
+        ...(distance(chain.points.at(-1)!, candidate.points.at(-1)!) < 0.01 / geometryFactor ? [{ index, reverse: true }] : []),
       ])
       if (matches.length > 1) { errors.push(`Branched or duplicate geometry on layer ${chain.layer}.`); break }
       if (!matches.length) {
         chain.points.reverse()
-        const canJoin = chains.some(c => c.layer === chain.layer && (distance(chain.points.at(-1)!, c.points[0]) < 0.01 || distance(chain.points.at(-1)!, c.points.at(-1)!) < 0.01))
+        const canJoin = chains.some(c => c.layer === chain.layer && (distance(chain.points.at(-1)!, c.points[0]) < 0.01 / geometryFactor || distance(chain.points.at(-1)!, c.points.at(-1)!) < 0.01 / geometryFactor))
         if (!canJoin) break
         continue
       }
       const match = matches[0], next = chains.splice(match.index, 1)[0].points
       if (match.reverse) next.reverse()
       chain.points.push(...next.slice(1))
-      closed = distance(chain.points[0], chain.points.at(-1)!) < 0.01
+      closed = distance(chain.points[0], chain.points.at(-1)!) < 0.01 / geometryFactor
       if (closed) chain.points.pop()
     }
     features.push({ id: `joined${features.length}`, name: `Contour ${features.length + 1}`, layer: chain.layer, points: chain.points, closed, kind: 'unassigned' })

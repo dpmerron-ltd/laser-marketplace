@@ -92,9 +92,9 @@ export function intersectionArea(a: Point[], b: Point[]): number {
   return solution.reduce((sum, p) => sum + Math.abs(ClipperLib.Clipper.Area(p)) / scale ** 2, 0)
 }
 
-export function arcPoints(center: Point, radius: number, start: number, sweep: number): Point[] {
+export function arcPoints(center: Point, radius: number, start: number, sweep: number, chordTolerance = tolerance): Point[] {
   if (!Number.isFinite(radius) || radius <= 0 || radius > 10000) throw new Error('Invalid curve radius.')
-  const angle = 2 * Math.acos(Math.max(-1, Math.min(1, 1 - tolerance / radius)))
+  const angle = 2 * Math.acos(Math.max(-1, Math.min(1, 1 - chordTolerance / radius)))
   const count = Math.max(2, Math.ceil(Math.abs(sweep) / Math.min(Math.PI / 12, angle)))
   if (count > 4000) throw new Error('Curve exceeds the geometry limit.')
   return Array.from({ length: count + 1 }, (_, i) => ({ x: center.x + radius * Math.cos(start + sweep * i / count), y: center.y + radius * Math.sin(start + sweep * i / count) }))

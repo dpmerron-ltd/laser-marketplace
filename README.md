@@ -1,42 +1,60 @@
 # Laser Marketplace
 
-An independent fork of `cnc-marketplace`, created for developing laser cut file generation and a reusable design catalogue.
+A separate local fork of `cnc-marketplace` for generating laser cut files. The primary app now uses controller-independent vector geometry, with a local workshop queue. LightBurn is not required.
 
-## Current status
+## Run
 
-This is the starting fork, including the source project's current uncommitted work. The inherited catalogue, DXF reader, sheet nesting, previews, and CNC generator are preserved. **Laser-specific file generation has not been implemented yet:** the existing generator and jobs API still produce CNC router G-code, not laser programs.
-
-The laser workflow can build on the existing geometry and nesting code to produce dimensioned SVG/DXF cut files, separate cut and engraving operations, and add kerf compensation. Controller-specific laser G-code will need its own output implementation and machine settings.
-
-## Run locally
-
-Use Node.js 22.12 or newer.
+Use Node.js 22.12 or newer. No cloud account or Supabase configuration is needed for the laser workflow.
 
 ```bash
 cd /Users/danmerron/Desktop/work/laser-marketplace
 npm ci
-cp .env.example .env.local
-npm run dev
+npm run build
+npm run workshop
 ```
 
-Open the Vite URL with `/laser-marketplace/`, normally `http://localhost:5173/laser-marketplace/`.
+Open **http://127.0.0.1:4318/laser-marketplace/**. The workshop binds only to the loopback interface. For development, run `npm run dev` in a second terminal and open `http://localhost:5173/laser-marketplace/`; Vite proxies workshop requests to port 4318.
 
-Configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in `.env.local` with a dedicated Supabase project before using the inherited catalogue. There is no fallback to the CNC project's backend, and the original project's environment file is not copied. Without configuration the app displays a setup notice.
+## Use it
 
-## Fork independence
+1. Import SVG/DXF or add the sample tag. Check dimensions, assign each path to cut, score or ignore, then approve the design revision.
+2. Configure the machine and stock, including measured kerf, speed, min/max power, passes, air assist, spacing and grain restrictions. Approve the material profile. Example settings are deliberately unapproved and are not production recommendations.
+3. Enter quantities and prepare a batch. The planner applies kerf once, nests components, scores before cutting, and cuts holes before outer contours. Inspect the planned and decoded controller previews.
+4. Download per-sheet files, preview SVGs, the complete plan, cutting list and printable labels. Save the batch to the workshop queue for durable records.
+5. In simulation, stage a sheet, record the operator start/finish, inspect components, and create a replacement batch for rejects. These actions do not move or fire any machine.
 
-- This folder is a separate Git repository with the original history and its own working files and dependencies.
-- No GitHub repository has been created or published. The original repository is available only as the `upstream` remote, with pushing disabled.
-- App branding, package name, Vite base path, Supabase project ID, authentication storage, and project backup storage use the Laser Marketplace identity.
-- Numbered duplicate files from the source workspace are preserved under `archive/inherited-duplicates/` and excluded from executable source.
-- Deployment workflows are manual. Configure the fork's own `SUPABASE_PROJECT_REF`, `SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_URL`, and frontend environment variables before deploying.
-- The inherited API retains its `cnc-api` function name and CNC request contracts until the laser API is implemented. See [API documentation](docs/API.md) and [inherited CNC documentation](docs/CNC_BASELINE.md).
+**Controller changes:** choose another adapter under Machine & material and approve the resulting profile revision. Designs and quantities stay usable. Existing jobs keep their original machine/profile snapshots, encoder version, artifact hashes and exact files. A new controller family requires an adapter, not a rewrite of the design or nesting workflow. See [controller integration](docs/CONTROLLERS.md).
 
-## Check the project
+## What works now
+
+- Local design catalogue with SVG/DXF import, revisions, review status, workspace backup/restore and explicit units.
+- Vector cut/score planning, contour validation, kerf compensation and rectangular sheet nesting with optional 90° rotation and grain locking.
+- Simulation output and experimental native Ruida `.rd` export. Every sheet is decoded and compared against planned movements/settings before export.
+- Persistent local jobs, SHA-256 artifact checks, idempotent order intake, per-machine transfer exclusion, audit history, restart reconciliation, inspection and replacement quantities.
+- SKU order API using the catalogue saved from the app. See [workshop API](docs/WORKSHOP.md).
+
+## Current limits
+
+**No live controller connection is enabled.** Ruida output has passed offline round-trip and independent MeerK40t decoding checks; it has not been run on a physical controller. The exact model/firmware, axis orientation, file acceptance and upload-only transport still require commissioning. The transport boundary is implemented, with simulation available and uncommissioned hardware blocked.
+
+The first version supports one active machine/material profile per catalogue, vector cut/score, and rectangular nesting. Raster engraving, shape nesting inside waste, tabs/bridges, QR selection, cloud polling, scheduled batching, automatic fulfilment and live controller telemetry are not implemented. Orders submitted to the API are prepared immediately as a batch of the configured material. No Shopify account or remote production service is connected.
+
+Browser drafts live in local storage; use **Back up workspace**. Workshop jobs and the optionally saved catalogue live in `.workshop/` and survive normal service restarts. Back up this directory independently. Treat the local service as a single-user workshop tool, not an internet-facing API.
+
+## Verification
 
 ```bash
 npm test
 npm run lint
 npm run build
+npm run build:workshop
 npm run build:api
 ```
+
+The optional independent Ruida decode procedure is in [CONTROLLERS.md](docs/CONTROLLERS.md). The longer target architecture and remaining phases are in [AUTOMATION.md](docs/AUTOMATION.md).
+
+## Fork independence
+
+This folder is its own Git repository with the original history. No GitHub repository has been created or published. The original repository is an `upstream` remote with pushing disabled; the original CNC workspace is unchanged. App/storage identifiers use the Laser Marketplace name. Deployment workflows remain manual.
+
+The inherited CNC implementation remains in source for reference and its tests still run, but `src/main.tsx` opens the new laser app. The legacy Supabase `cnc-api` is not a laser endpoint. Its configuration and documentation are retained in [API.md](docs/API.md) and [CNC_BASELINE.md](docs/CNC_BASELINE.md). Original credentials were not copied into this fork.

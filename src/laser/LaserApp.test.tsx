@@ -1,0 +1,31 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { webcrypto } from 'node:crypto'
+import LaserApp from './LaserApp'
+beforeEach(() => { localStorage.clear(); vi.stubGlobal('crypto', webcrypto); vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline'))) })
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+it('prepares a reviewed sample batch without Supabase or workshop connectivity', async () => {
+  render(<LaserApp />)
+  fireEvent.click(screen.getByRole('button', { name: 'Add sample tag' }))
+  expect(screen.getByText('60.00 × 30.00 mm · 3 paths')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Approve dimensions & operations' }))
+  await screen.findByRole('button', { name: 'Revision approved' })
+  fireEvent.click(screen.getByRole('button', { name: 'Machine & material' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve profile for this machine' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Approve profile for this machine' })).toBeDisabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Prepare a batch' }))
+  fireEvent.change(screen.getByRole('spinbutton', { name: 'Quantity of TAG-60-1' }), { target: { value: '4' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Prepare batch' }))
+  await screen.findByRole('button', { name: 'sheet-1.laser.json' })
+  expect(screen.getByRole('button', { name: 'Save to workshop queue' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show decoded controller output' }))
+  expect(screen.getByAltText('Decoded controller toolpath in machine coordinates')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Machine & material' }))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Controller adapter' }), { target: { value: 'ruida-rd' } })
+  expect(screen.getByRole('button', { name: 'Approve profile for this machine' })).not.toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Prepare a batch' }))
+  expect(screen.getByRole('button', { name: 'sheet-1.laser.json' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Prepare batch' }))
+  await screen.findByRole('alert')
+  expect(screen.getByRole('alert')).toHaveTextContent('Approve')
+})

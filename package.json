@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run calibration && tsc -b && vite build",
+    "calibration": "node scripts/generate-laser-calibration.mjs",
     "build:api": "tsc -p tsconfig.api.json && node scripts/build-api.mjs",
     "lint": "oxlint",
     "audit:gcode": "node scripts/audit-gcode.mjs",

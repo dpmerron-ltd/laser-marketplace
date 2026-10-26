@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
-import { ArrowDownToLine, Check, CircleDot, Layers, Plus, Upload, Workflow, ShoppingBag } from 'lucide-react'
+import { ArrowDownToLine, Check, CircleDot, Layers, Plus, Upload, Workflow, ShoppingBag, Ruler } from 'lucide-react'
 import { adapters } from './controllers'
 import { buildArtifacts, type Artifact } from './artifacts'
 import { bounds, validatePaths } from './geometry'
@@ -10,6 +10,7 @@ import { emptyWorkspace, parseWorkspace, type Workspace } from './workspace'
 import { workshopApi as api } from './client'
 import Preview from './SheetPreview'
 import ProductionPage from './ProductionPage'
+import CalibrationPage from './CalibrationPage'
 import './laser.css'
 
 const storageKey = 'laser-marketplace-workspace-v1'
@@ -107,11 +108,12 @@ export default function LaserApp() {
   }
   const selectedSheet = plan?.sheets.find(s => s.number === sheetNumber) ?? plan?.sheets[0]
   const artifacts = useMemo(() => storedArtifacts ?? (plan ? buildArtifacts(plan) : []), [plan, storedArtifacts])
-  const tabs = [{ id: 'designs', label: 'Design library', icon: Layers }, { id: 'profiles', label: 'Machine & material', icon: CircleDot }, { id: 'production', label: 'Shopify production', icon: ShoppingBag }, { id: 'batch', label: 'Prepare a batch', icon: Plus }, { id: 'queue', label: 'Workshop queue', icon: Workflow }]
+  const tabs = [{ id: 'designs', label: 'Design library', icon: Layers }, { id: 'profiles', label: 'Machine & material', icon: CircleDot }, { id: 'calibration', label: 'Calibration tests', icon: Ruler }, { id: 'production', label: 'Shopify production', icon: ShoppingBag }, { id: 'batch', label: 'Prepare a batch', icon: Plus }, { id: 'queue', label: 'Workshop queue', icon: Workflow }]
   return <div className="laser-app">
     <header className="laser-header"><div className="laser-brand"><span className="laser-mark">✳</span><div><strong>Laser Marketplace</strong><small>Design to workshop</small></div></div><div className="laser-header-right"><span className={'laser-dot ' + (online ? 'online' : '')} />{online ? 'Workshop connected' : 'Offline planning'}<span className="laser-controller">{machine.controller === 'simulation' ? 'Simulation' : 'Ruida · experimental'}</span></div></header>
     <div className="laser-layout"><aside className="laser-sidebar"><nav aria-label="Laser workflow">{tabs.map(t => <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}><t.icon size={18}/>{t.label}</button>)}</nav><div className="laser-sidebar-note"><strong>Your designs, any controller.</strong><p>Jobs store their own geometry, settings and adapter version. Changing the controller only affects new jobs.</p></div><button className="laser-backup" onClick={() => download(textArtifact('laser-workspace.json', workspace))}><ArrowDownToLine size={16}/> Back up workspace</button><label className="laser-backup">Restore backup<input type="file" accept=".json" hidden onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void run(async () => { setWorkspace(parseWorkspace(JSON.parse(await f.text()))); setMessage('Workspace restored. Saved workshop jobs are unchanged.') }) }}/></label></aside>
     <main className="laser-main">
+      {tab === 'calibration' && <CalibrationPage/>}
       {error && <div role="alert" className="laser-notice error">{error}</div>}{message && <div role="status" className="laser-notice success">{message}</div>}
       {tab === 'designs' && <><div className="laser-title"><div><span className="laser-eyebrow">01 / VECTOR DESIGNS</span><h1>A library ready to make.</h1><p>Import a drawing, assign operations and approve its dimensions once.</p></div><label className="laser-button primary"><Upload size={16}/> Import SVG / DXF<input type="file" hidden accept=".svg,.dxf" disabled={busy} onChange={importFile}/></label></div>
         <div className="laser-toolbar"><Field label="DXF source units"><select value={units} onChange={e => setUnits(e.target.value as typeof units)}><option value="auto">Read from drawing</option><option value="mm">Millimetres</option><option value="inches">Inches</option></select></Field><button onClick={() => { const d = { ...structuredClone(demoDesign), id: crypto.randomUUID(), sku: `TAG-60-${designs.length + 1}`, materialId: material.id }; setWorkspace(w => ({ ...w, designs: [...w.designs, d] })); setSelected(d.id) }}>Add sample tag</button><span>Cut <b className="laser-cut">—</b> &nbsp; Score <b className="laser-score">—</b></span></div>

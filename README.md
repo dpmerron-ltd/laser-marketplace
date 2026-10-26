@@ -28,6 +28,7 @@ Open **http://127.0.0.1:4318/laser-marketplace/**. The workshop binds only to th
 ## What works now
 
 - Local design catalogue with SVG/DXF import, revisions, review status, workspace backup/restore and explicit units.
+- **Calibration tests** page with downloadable SVG/DXF packs for all four materials: orientation, pilot, nine speed/power trial geometries, three kerf pairs, fit comb and final dimensional check. Includes photo/measurement instructions and a kerf calculator. These initial drawings have no machine-specific cutting presets; see [calibration workflow](docs/CALIBRATION.md).
 - A material library with separate 3/6 mm plywood and MDF profiles, per-SKU material assignments and mixed-material order splitting. Existing single-profile workspaces migrate without losing their saved settings.
 - Vector cut/score planning, contour validation, kerf compensation and rectangular sheet nesting with optional 90° rotation and grain locking.
 - Simulation output and experimental native Ruida `.rd` export. Every sheet is decoded and compared against planned movements/settings before export.

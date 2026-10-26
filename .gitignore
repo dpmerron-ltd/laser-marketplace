@@ -34,3 +34,4 @@ dist-ssr
 # Local laser workshop artifacts and queue
 .workshop/
 dist-workshop/
+public/calibration/

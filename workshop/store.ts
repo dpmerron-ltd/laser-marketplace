@@ -52,7 +52,7 @@ export class WorkshopStore {
     const artifactHash = hash(canonical(files)), dir = join(this.root, `.preparing-${randomUUID()}`)
     mkdirSync(dir, { mode: 0o700 })
     for (const a of artifacts) writeFileSync(join(dir, a.name), a.bytes, { mode: 0o600, flag: 'wx' })
-    const job: QueueJob = { id, reference: request.reference, createdAt: new Date().toISOString(), controller: request.machine.controller, artifactHash, sheets: plan.sheets.map(s => ({ number: s.number, state: 'ready', accepted: [], rejected: [] })), events: [] }
+    const job: QueueJob = { id, reference: request.reference, createdAt: new Date().toISOString(), controller: request.machine.controller, materialName: request.material.name, thickness: request.material.thickness, artifactHash, sheets: plan.sheets.map(s => ({ number: s.number, state: 'ready', accepted: [], rejected: [] })), events: [] }
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id, requestHash, artifactHash, adapterVersion: adapters[request.machine.controller].version, files } satisfies Manifest, null, 2), { mode: 0o600 })
     writeFileSync(join(dir, 'status.json'), JSON.stringify(job, null, 2), { mode: 0o600 })
     renameSync(dir, this.directory(id))
@@ -62,6 +62,7 @@ export class WorkshopStore {
     const action = actionSchema.parse(raw)
     const job = this.get(id), status = job.sheets.find(s => s.number === number)
     if (!status) throw new Error('Unknown sheet')
+    if (Object.keys(job.productionHolds ?? {}).length && ['stage', 'record-start'].includes(action.action)) throw new Error('Shopify order changed: this production job is on hold. Review the order before starting.')
     const plan = this.plan(id), sheet = plan.sheets.find(s => s.number === number)!
     const requireState = (...states: SheetStatus['state'][]) => { if (!states.includes(status.state)) throw new Error(`Cannot ${action.action} while sheet is ${status.state}`) }
     const note = action.note?.trim() ?? ''
@@ -84,7 +85,9 @@ export class WorkshopStore {
           const receipt = await transport.upload({ machine: plan.request.machine, jobId: id, sheet: number, filename, bytes, hash: file.hash })
           if (receipt.storedHash !== file.hash) throw new Error('Transport receipt does not match the artifact hash')
           status.receipt = receipt.reference; status.state = 'staged'
+          const latest = this.get(id); job.productionHolds = latest.productionHolds; job.events = latest.events
         } catch (e) {
+          const latest = this.get(id); job.productionHolds = latest.productionHolds; job.events = latest.events
           status.state = 'needs_reconciliation'
           job.events.push({ at: new Date().toISOString(), sheet: number, action: 'transfer-uncertain', note: e instanceof Error ? e.message : 'Upload outcome is unknown' })
           this.save(job)
@@ -111,12 +114,32 @@ export class WorkshopStore {
     this.save(job)
     return job
   }
+  setProductionHolds(id: string, holds: Record<string, string>) {
+    const job = this.get(id)
+    if (canonical(job.productionHolds ?? {}) === canonical(holds)) return
+    job.productionHolds = holds
+    job.events.push({ at: new Date().toISOString(), sheet: 0, action: Object.keys(holds).length ? 'production-hold' : 'production-hold-cleared', note: Object.values(holds).join('; ') || 'Production review no longer blocks this job' })
+    this.save(job)
+  }
+  cancelUnstarted(id: string, note: string) {
+    const job = this.get(id)
+    if (job.sheets.every(s => s.state === 'cancelled')) return job
+    if (!note.trim() || note.length > 2000) throw new Error('Record why this unstarted batch is being cancelled')
+    if (job.sheets.some(s => s.state !== 'ready') || job.events.some(e => ['stage', 'record-start', 'transfer-uncertain'].includes(e.action))) throw new Error('Only an unstarted, unstaged batch can be cancelled automatically; reconcile machine work manually')
+    for (const sheet of job.sheets) sheet.state = 'cancelled'
+    job.events.push({ at: new Date().toISOString(), sheet: 0, action: 'cancel-batch', note })
+    this.save(job)
+    return job
+  }
   replacements(id: string): QueueJob {
     const source = this.get(id), plan = this.plan(id)
+    if (Object.keys(source.productionHolds ?? {}).length) throw new Error('Review Shopify order changes before preparing replacements')
     if (source.sheets.some(s => s.state !== 'complete')) throw new Error('Inspect all sheets before creating replacements')
     const rejected = source.sheets.flatMap(s => s.rejected)
     if (!rejected.length) throw new Error('No rejected components need replacement')
     const lines = plan.request.lines.flatMap((line, i) => { const quantity = rejected.filter(p => p.startsWith(`line-${i + 1}-part-`)).length; return quantity ? [{ ...line, quantity }] : [] })
-    return this.prepare({ ...plan.request, reference: `${plan.request.reference.slice(0, 140)} replacements`, lines }, `replacement-${id}`)
+    const replacement = this.prepare({ ...plan.request, reference: `${plan.request.reference.slice(0, 140)} replacements`, lines }, `replacement-${id}`)
+    if (!replacement.sourceJobId) { replacement.sourceJobId = id; this.save(replacement) }
+    return replacement
   }
 }

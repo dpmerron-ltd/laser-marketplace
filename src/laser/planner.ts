@@ -11,6 +11,7 @@ export function planJob(input: JobRequest): Plan {
   if ([material.cut, material.score].some(s => s.maxPower > machine.maxPower)) throw new Error('Material settings exceed the machine power limit')
   const revisions = new Map<string, string>()
   for (const line of lines) {
+    if (line.design.materialId && line.design.materialId !== material.id) throw new Error(`SKU ${line.design.sku} requires a different material profile`)
     const key = `${line.design.id}:${line.design.revision}`, json = JSON.stringify(line.design)
     if (revisions.has(key) && revisions.get(key) !== json) throw new Error('One design revision has conflicting definitions')
     revisions.set(key, json)

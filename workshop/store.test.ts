@@ -81,6 +81,21 @@ describe('durable jobs and lifecycle', async () => {
     expect(store.get(job.id).sheets[0].state).toBe('ready')
   })
 })
+it('preserves order holds added while a file upload is in flight', async () => {
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const service = new WorkshopStore(root, () => ({ id: 'test', uploadOnlyVerified: true,
+    async upload(input) { await pending; return { reference: 'fixture', storedHash: input.hash } },
+    async status() { return { state: 'simulation' as const, message: 'test' } },
+  }))
+  const job = service.prepare(fixture(), 'held-during-upload')
+  const transfer = service.act(job.id, 1, { action: 'stage' })
+  service.setProductionHolds(job.id, { order: 'Order was cancelled during transfer' })
+  release(); await transfer
+  expect(service.get(job.id).productionHolds).toEqual({ order: 'Order was cancelled during transfer' })
+  expect(service.get(job.id).events.map(e => e.action)).toEqual(['production-hold', 'stage'])
+  await expect(service.act(job.id, 1, { action: 'record-start', note: 'Check' })).rejects.toThrow('on hold')
+})
 it('serves order automation locally and rejects cross-origin mutations', async () => {
   const server = createWorkshopServer(store, 4318)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))

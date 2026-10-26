@@ -11,6 +11,7 @@ export const pathSchema = z.object({
 export const designSchema = z.object({
   id, revision: z.number().int().positive(), name, sku: name, approved: z.boolean(),
   sourceName: name, sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  materialId: id.nullable().optional(),
   allowRotation: z.boolean(), paths: z.array(pathSchema).min(1).max(250),
 }).refine(d => new Set(d.paths.map(p => p.id)).size === d.paths.length, 'Path IDs must be unique within a design')
 export const operationSchema = z.object({
@@ -49,9 +50,9 @@ export interface PlannedPath { id: string; instanceId: string; operation: 'cut' 
 export interface Placement { id: string; sku: string; name: string; order: string; designId: string; revision: number; x: number; y: number; width: number; height: number; rotated: boolean }
 export interface Sheet { number: number; width: number; height: number; placements: Placement[]; paths: PlannedPath[]; travelMm: number; cutMm: number; estimatedSeconds: number }
 export interface Plan { schema: 'laser-plan/v1'; plannerVersion: string; request: JobRequest; sheets: Sheet[]; warnings: string[] }
-export type SheetState = 'ready' | 'transferring' | 'staged' | 'running' | 'awaiting_inspection' | 'complete' | 'needs_reconciliation'
+export type SheetState = 'ready' | 'transferring' | 'staged' | 'running' | 'awaiting_inspection' | 'complete' | 'needs_reconciliation' | 'cancelled'
 export interface SheetStatus { number: number; state: SheetState; accepted: string[]; rejected: string[]; receipt?: string }
-export interface QueueJob { id: string; reference: string; createdAt: string; controller: Machine['controller']; sheets: SheetStatus[]; artifactHash: string; events: { at: string; sheet: number; action: string; note: string }[] }
+export interface QueueJob { sourceJobId?: string; productionHolds?: Record<string, string>; materialName?: string; thickness?: number; id: string; reference: string; createdAt: string; controller: Machine['controller']; sheets: SheetStatus[]; artifactHash: string; events: { at: string; sheet: number; action: string; note: string }[] }
 
 // Deliberately unapproved examples: these are demonstration values, not cutting recommendations.
 export const defaultMachine: Machine = { id: 'workshop-laser', revision: 1, name: 'Workshop laser', controller: 'simulation', controllerModel: 'Not commissioned', bedWidth: 600, bedHeight: 400, origin: 'top-left', mirrorX: false, mirrorY: false, maxPower: 70 }

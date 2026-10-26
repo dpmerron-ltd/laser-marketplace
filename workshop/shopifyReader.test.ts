@@ -1,0 +1,70 @@
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest'
+import { createShopifyReader, shopifyConfig } from './shopifyReader'
+const page = (hasNextPage = false, endCursor: string | null = null) => ({ hasNextPage, endCursor })
+const line = (id: number, sku = 'PLY3') => ({ id: `gid://shopify/LineItem/${id}`, sku, currentQuantity: 2, unfulfilledQuantity: 1 })
+const rawOrder = (id = 1) => ({ id: `gid://shopify/Order/${id}`, name: `#${id}`, updatedAt: '2026-10-26T12:00:00Z', cancelledAt: null as string | null, closed: false, test: false, displayFinancialStatus: 'PAID', displayFulfillmentStatus: 'UNFULFILLED', lineItems: { nodes: [line(id)], pageInfo: page() } })
+const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
+const config = { shop: 'fixture.myshopify.com', accessToken: 'test-token', pollSeconds: 60 }
+describe('Shopify Admin API reader', () => {
+  it('validates configuration without accepting arbitrary hosts or exposing credentials', () => {
+    expect(shopifyConfig({})).toBeNull()
+    expect(() => shopifyConfig({ LASER_SHOPIFY_SHOP: 'https://evil.example/path', LASER_SHOPIFY_ACCESS_TOKEN: 'secret' })).toThrow('hostname')
+    expect(() => shopifyConfig({ LASER_SHOPIFY_SHOP: config.shop })).toThrow('client ID and secret')
+    expect(() => shopifyConfig({ LASER_SHOPIFY_SHOP: config.shop, LASER_SHOPIFY_ACCESS_TOKEN: 'secret', LASER_SHOPIFY_POLL_SECONDS: '1' })).toThrow('interval')
+  })
+  it('paginates orders and every line item, then verifies disappeared tracked orders by ID', async () => {
+    const first = rawOrder(1); first.lineItems.pageInfo = page(true, 'lines-next')
+    const cancelled = { ...rawOrder(3), cancelledAt: '2026-10-26T12:30:00Z' }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ data: { orders: { nodes: [first], pageInfo: page(true, 'orders-next') } } }))
+      .mockResolvedValueOnce(response({ data: { order: { ...rawOrder(1), lineItems: { nodes: [line(11, 'MDF6')], pageInfo: page() } } } }))
+      .mockResolvedValueOnce(response({ data: { orders: { nodes: [rawOrder(2)], pageInfo: page() } } }))
+      .mockResolvedValueOnce(response({ data: { nodes: [cancelled, null] } }))
+    const result = await createShopifyReader(config, fetcher).read(['gid://shopify/Order/1', 'gid://shopify/Order/3', 'gid://shopify/Order/4'])
+    expect(result.orders).toHaveLength(3)
+    expect(result.orders[0].lines.map(l => l.sku)).toEqual(['PLY3', 'MDF6'])
+    expect(result.orders[2].cancelledAt).not.toBeNull()
+    expect(result.unavailable).toEqual(['gid://shopify/Order/4'])
+    const calls = fetcher.mock.calls.map(([url, init]) => ({ url, init, body: JSON.parse(init.body) }))
+    expect(calls[0].url).toBe(`https://${config.shop}/admin/api/2026-10/graphql.json`)
+    expect(calls[0].body.query).toContain('financial_status:paid')
+    expect(calls[0].body.query).toContain('test:false')
+    expect(calls[0].body.query).not.toMatch(/email|shippingAddress|customer\s*\{/)
+    expect(calls[1].body.variables.after).toBe('lines-next')
+    expect(calls[2].body.variables.after).toBe('orders-next')
+    expect(calls.every(c => c.init.redirect === 'error')).toBe(true)
+  })
+  it('rejects an order edited while line items are being paginated', async () => {
+    const first = rawOrder(); first.lineItems.pageInfo = page(true, 'next')
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ data: { orders: { nodes: [first], pageInfo: page() } } })).mockResolvedValueOnce(response({ data: { order: { ...rawOrder(), updatedAt: '2026-10-26T12:01:00Z' } } }))
+    await expect(createShopifyReader(config, fetcher).read([])).rejects.toThrow('changed while')
+  })
+  it('rejects partial GraphQL data, duplicate line items and stuck cursors', async () => {
+    const partial = vi.fn().mockResolvedValue(response({ data: { orders: { nodes: [], pageInfo: page() } }, errors: [{ extensions: { code: 'ACCESS_DENIED' } }] }))
+    await expect(createShopifyReader(config, partial).read([])).rejects.toThrow('complete order data')
+    const bad = rawOrder(); bad.lineItems.nodes.push(line(1))
+    await expect(createShopifyReader(config, vi.fn().mockResolvedValue(response({ data: { orders: { nodes: [bad], pageInfo: page() } } }))).read([])).rejects.toThrow('duplicate line')
+    const loop = vi.fn().mockImplementation(async () => response({ data: { orders: { nodes: [], pageInfo: page(true, 'same') } } }))
+    await expect(createShopifyReader(config, loop).read([])).rejects.toThrow('pagination')
+    expect(loop).toHaveBeenCalledTimes(2)
+  })
+  it('caches client-credential tokens and refreshes on authentication expiry', async () => {
+    const credentials = { shop: config.shop, clientId: 'test-client', clientSecret: 'test-secret', pollSeconds: 60 }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ access_token: 'first', expires_in: 86399, scope: 'read_orders' }))
+      .mockResolvedValueOnce(response({ data: { orders: { nodes: [], pageInfo: page() } } }))
+      .mockResolvedValueOnce(response({}, 401))
+      .mockResolvedValueOnce(response({ access_token: 'second', expires_in: 86399, scope: 'read_orders' }))
+      .mockResolvedValueOnce(response({ data: { orders: { nodes: [], pageInfo: page() } } }))
+    const reader = createShopifyReader(credentials, fetcher)
+    await reader.read([]); await reader.read([])
+    expect(fetcher).toHaveBeenCalledTimes(5)
+    expect(JSON.parse(fetcher.mock.calls[0][1].body).grant_type).toBe('client_credentials')
+    expect(fetcher.mock.calls[4][1].headers['X-Shopify-Access-Token']).toBe('second')
+  })
+  it('does not echo response bodies or tokens in authentication/network errors', async () => {
+    await expect(createShopifyReader(config, vi.fn().mockResolvedValue(response({ token: 'do-not-show' }, 401))).read([])).rejects.toThrow('denied access')
+    await expect(createShopifyReader(config, vi.fn().mockRejectedValue(new Error('do-not-show token'))).read([])).rejects.toThrow('could not be reached')
+  })
+})

@@ -1,19 +1,20 @@
 import { createServer, type IncomingMessage } from 'node:http'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { resolve, join, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
-import { designSchema, machineSchema, materialSchema, type JobRequest } from '../src/laser/model'
+import type { JobRequest } from '../src/laser/model'
+import { ShopifySync } from './shopifySync'
+import { prepareCatalogueOrder } from './catalogueOrders'
 import { WorkshopStore, type Action } from './store'
 
-const workspaceSchema = z.object({ machine: machineSchema, material: materialSchema, designs: z.array(designSchema).max(100) })
 async function body(req: IncomingMessage): Promise<unknown> {
   if (!req.headers['content-type']?.startsWith('application/json')) throw new Error('Content-Type must be application/json')
   const chunks: Buffer[] = []; let size = 0
   for await (const chunk of req) { size += chunk.length; if (size > 8_000_000) throw new Error('Request exceeds 8 MB'); chunks.push(Buffer.from(chunk)) }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
-export function createWorkshopServer(store: WorkshopStore, port: number, webRoot?: string) {
+export function createWorkshopServer(store: WorkshopStore, port: number, webRoot?: string, sync = ShopifySync.fromEnvironment(store)) {
   return createServer(async (req, res) => {
     const send = (status: number, data: unknown) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(data)) }
     const hosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`])
@@ -33,29 +34,37 @@ export function createWorkshopServer(store: WorkshopStore, port: number, webRoot
       const parts = path.slice('/workshop-api/'.length).split('/')
       if (req.method === 'GET' && parts[0] === 'health') { send(200, { status: 'ok', transport: 'simulation-only', liveUpload: false }); return }
       if (parts[0] === 'workspace') {
-        const file = join(store.root, 'workspace.json')
-        if (req.method === 'GET') { send(200, existsSync(file) ? workspaceSchema.parse(JSON.parse(readFileSync(file, 'utf8'))) : null); return }
+        if (req.method === 'GET') { send(200, sync.production.catalogue.read()); return }
         if (req.method === 'PUT') {
-          const workspace = workspaceSchema.parse(await body(req))
-          const skus = workspace.designs.map(d => d.sku)
-          if (new Set(skus).size !== skus.length) throw new Error('Catalogue SKUs must be unique')
-          writeFileSync(file + '.tmp', JSON.stringify(workspace, null, 2), { mode: 0o600 }); renameSync(file + '.tmp', file)
+          const workspace = sync.production.catalogue.save(await body(req))
+          sync.production.view() // Retry held SKUs and rebuild pending beds using the newly saved library.
           send(200, workspace); return
         }
       }
+      if (parts[0] === 'shopify') {
+        if (req.method === 'GET' && parts[1] === 'status') { send(200, sync.status()); return }
+        if (req.method === 'POST' && parts[1] === 'sync') { await body(req); await sync.sync(); send(200, sync.status()); return }
+        if (req.method === 'PUT' && parts[1] === 'automation') { const data = z.object({ enabled: z.boolean() }).parse(await body(req)); send(200, sync.setEnabled(data.enabled)); return }
+      }
+      if (parts[0] === 'production') {
+        if (req.method === 'GET' && parts.length === 1) { send(200, sync.production.view()); return }
+        if (req.method === 'POST' && parts[1] === 'batches' && parts[3] === 'release' && parts.length === 4) {
+          await body(req)
+          await sync.sync() // Refresh eligibility before freezing an order onto a production job.
+          send(201, sync.production.release(parts[2])); return
+        }
+        if (req.method === 'POST' && parts[1] === 'jobs' && parts[3] === 'cancel' && parts.length === 4) {
+          const input = z.object({ note: z.string().trim().min(1).max(2000) }).parse(await body(req))
+          send(200, sync.production.cancelUnstarted(parts[2], input.note)); return
+        }
+      }
       if (req.method === 'POST' && ['jobs', 'orders'].includes(parts[0]) && parts.length === 1) {
-        const input = await body(req)
-        let request: JobRequest
+        const input = await body(req), key = String(req.headers['idempotency-key'] ?? '')
         if (parts[0] === 'orders') {
-          const order = z.object({ reference: z.string().min(1).max(160), lines: z.array(z.object({ sku: z.string(), quantity: z.number().int().positive(), order: z.string().optional() })).min(1).max(100) }).parse(input)
-          const workspace = workspaceSchema.parse(JSON.parse(readFileSync(join(store.root, 'workspace.json'), 'utf8')))
-          request = { reference: order.reference, machine: workspace.machine, material: workspace.material, lines: order.lines.map(l => {
-            const design = workspace.designs.find(d => d.sku === l.sku)
-            if (!design) throw new Error(`Unknown SKU ${l.sku}`)
-            return { design, quantity: l.quantity, order: l.order ?? order.reference }
-          }) }
-        } else request = input as JobRequest
-        send(201, store.prepare(request, String(req.headers['idempotency-key'] ?? ''))); return
+          const jobs = prepareCatalogueOrder(store, input, key)
+          send(201, jobs.length === 1 ? jobs[0] : { jobs }); return
+        }
+        send(201, store.prepare(input as JobRequest, key)); return
       }
       if (parts[0] === 'jobs') {
         const id = parts[1]
@@ -69,7 +78,11 @@ export function createWorkshopServer(store: WorkshopStore, port: number, webRoot
             res.writeHead(200, { 'Content-Type': artifact.mime, 'Content-Disposition': `attachment; filename="${parts[3]}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(artifact.bytes); return
           }
         }
-        if (req.method === 'POST' && parts[2] === 'sheets' && parts[4] === 'actions') { send(200, await store.act(id, Number(parts[3]), await body(req) as Action)); return }
+        if (req.method === 'POST' && parts[2] === 'sheets' && parts[4] === 'actions') {
+          const action = await body(req) as Action
+          if (sync.production.tracksJob(id) && ['stage', 'record-start'].includes(action?.action)) await sync.sync()
+          send(200, await store.act(id, Number(parts[3]), action)); return
+        }
         if (req.method === 'POST' && parts[2] === 'replacements') { await body(req); send(201, store.replacements(id)); return }
       }
       send(404, { error: 'Unknown workshop route' })
@@ -91,9 +104,10 @@ export function startWorkshop() {
   writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 })
   const release = () => { if (existsSync(lock) && readFileSync(lock, 'utf8') === String(process.pid)) unlinkSync(lock) }
   process.on('exit', release)
-  const store = new WorkshopStore(root), server = createWorkshopServer(store, port, resolve('dist'))
+  const store = new WorkshopStore(root), sync = ShopifySync.fromEnvironment(store), server = createWorkshopServer(store, port, resolve('dist'), sync)
+  sync.start()
   server.listen(port, '127.0.0.1', () => console.log(`Laser workshop: http://127.0.0.1:${port}/laser-marketplace/ (simulation; live transfer disabled)`))
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => server.close(() => { release(); process.exit(0) }))
-  server.on('error', error => { console.error(error.message); release(); process.exitCode = 1 })
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => { sync.stop(); server.close(() => { release(); process.exit(0) }) })
+  server.on('error', error => { sync.stop(); console.error(error.message); release(); process.exitCode = 1 })
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) startWorkshop()

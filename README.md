@@ -17,9 +17,9 @@ Open **http://127.0.0.1:4318/laser-marketplace/**. The workshop binds only to th
 
 ## Use it
 
-1. Import SVG/DXF or add the sample tag. Check dimensions, assign each path to cut, score or ignore, then approve the design revision.
-2. Configure the machine and stock, including measured kerf, speed, min/max power, passes, air assist, spacing and grain restrictions. Approve the material profile. Example settings are deliberately unapproved and are not production recommendations.
-3. Enter quantities and prepare a batch. The planner applies kerf once, nests components, scores before cutting, and cuts holes before outer contours. Inspect the planned and decoded controller previews.
+1. Import SVG/DXF or add the sample tag. Give each design its exact Shopify variant SKU and assign its material. Check dimensions, assign each path to cut, score or ignore, then approve the design revision.
+2. Configure the machine and the four stock profiles: **3 mm plywood, 6 mm plywood, 3 mm MDF and 6 mm MDF**. Record measured kerf, speed, min/max power, passes, air assist, spacing and grain restrictions, then approve each calibrated material profile. Example settings are deliberately unapproved and are not production recommendations.
+3. Save the catalogue to the workshop. Once [Shopify is connected](docs/SHOPIFY.md), paid, unfulfilled orders automatically fill draft beds by material and thickness. Review a draft and release it to freeze its files. You can also enter quantities manually. The planner applies kerf once, scores before cutting and cuts holes before outer contours. Inspect the planned and decoded controller previews.
 4. Download per-sheet files, preview SVGs, the complete plan, cutting list and printable labels. Save the batch to the workshop queue for durable records.
 5. In simulation, stage a sheet, record the operator start/finish, inspect components, and create a replacement batch for rejects. These actions do not move or fire any machine.
 
@@ -28,18 +28,20 @@ Open **http://127.0.0.1:4318/laser-marketplace/**. The workshop binds only to th
 ## What works now
 
 - Local design catalogue with SVG/DXF import, revisions, review status, workspace backup/restore and explicit units.
+- A material library with separate 3/6 mm plywood and MDF profiles, per-SKU material assignments and mixed-material order splitting. Existing single-profile workspaces migrate without losing their saved settings.
 - Vector cut/score planning, contour validation, kerf compensation and rectangular sheet nesting with optional 90° rotation and grain locking.
 - Simulation output and experimental native Ruida `.rd` export. Every sheet is decoded and compared against planned movements/settings before export.
 - Persistent local jobs, SHA-256 artifact checks, idempotent order intake, per-machine transfer exclusion, audit history, restart reconciliation, inspection and replacement quantities.
 - SKU order API using the catalogue saved from the app. See [workshop API](docs/WORKSHOP.md).
+- Optional Shopify polling every 60 seconds, automatic nesting across compatible orders, persistent allocation records, duplicate prevention and review holds for missing SKUs or changes after release. See [Shopify setup and workflow](docs/SHOPIFY.md).
 
 ## Current limits
 
 **No live controller connection is enabled.** Ruida output has passed offline round-trip and independent MeerK40t decoding checks; it has not been run on a physical controller. The exact model/firmware, axis orientation, file acceptance and upload-only transport still require commissioning. The transport boundary is implemented, with simulation available and uncommissioned hardware blocked.
 
-The first version supports one active machine/material profile per catalogue, vector cut/score, and rectangular nesting. Raster engraving, shape nesting inside waste, tabs/bridges, QR selection, cloud polling, scheduled batching, automatic fulfilment and live controller telemetry are not implemented. Orders submitted to the API are prepared immediately as a batch of the configured material. No Shopify account or remote production service is connected.
+The first version supports one machine with multiple material profiles, one vector component per SKU, vector cut/score and rectangular nesting. Raster engraving, shape nesting inside waste, tabs/bridges, QR selection, timed/automatic bed release, automatic Shopify fulfilment and live controller telemetry are not implemented. The local SKU API immediately freezes jobs per material; Shopify orders accumulate on draft beds until the operator releases them. No Shopify account is connected until local credentials are configured.
 
-Browser drafts live in local storage; use **Back up workspace**. Workshop jobs and the optionally saved catalogue live in `.workshop/` and survive normal service restarts. Back up this directory independently. Treat the local service as a single-user workshop tool, not an internet-facing API.
+Browser drafts live in local storage; use **Back up workspace**. Workshop jobs, saved catalogue, Shopify order snapshots and allocation history live in `.workshop/` and survive normal service restarts. Back up this directory as a unit: losing allocation history can make old orders appear unproduced. Treat the local service as a single-user workshop tool, not an internet-facing API.
 
 ## Verification
 

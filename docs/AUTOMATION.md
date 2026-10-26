@@ -1,8 +1,8 @@
 # Automated DSP laser workflow
 
-Design decision and implementation status, 25 October 2026. The first local implementation is now available: the main app uses a controller-neutral laser planner, vector catalogue, versioned profiles, nesting, experimental Ruida export, immutable artifacts, a local queue and SKU order intake. No machine connection or cutting trial has been performed.
+Design decision and implementation status, 26 October 2026. The local implementation includes a controller-neutral laser planner, vector catalogue, a four-material library, versioned profiles, nesting, experimental Ruida export, immutable artifacts, a local queue and SKU order intake. Optional Shopify polling fills draft beds automatically by material and thickness. No machine connection or cutting trial has been performed.
 
-The sections below describe the broader target architecture. Live Ruida transport, remote API polling, multi-component products, material grouping across profiles, scheduled batching, QR selection and fulfilment integration remain future work. The current service runs locally and prepares explicitly submitted orders immediately. See [README](../README.md), [workshop API](WORKSHOP.md) and [controller integration and qualification status](CONTROLLERS.md) for the implemented behaviour.
+The sections below describe the broader target architecture. Live Ruida transport, multi-component products, timed/automatic bed release, QR selection and fulfilment integration remain future work. The service polls Shopify directly when configured and automatically prepares draft beds across compatible orders; operator release freezes them. See [README](../README.md), [Shopify setup](SHOPIFY.md), [workshop API](WORKSHOP.md) and [controller integration and qualification status](CONTROLLERS.md) for the implemented behaviour.
 
 The target is to turn an approved product and quantity, or an incoming production order, into a prepared job on the laser. Laser Marketplace owns the design, material settings, nesting, job generation and queue. A background workshop service handles communication with the controller. LightBurn is not part of the workflow.
 

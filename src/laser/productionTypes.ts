@@ -4,7 +4,7 @@ export interface ProductionOrderView {
   lines: { id: string; sku: string | null; quantity: number; allocated: number }[]; jobIds: string[]
 }
 export interface ProductionBatch {
-  id: string; materialId: string; materialName: string; thickness: number; orderNames: string[]; componentCount: number; plan: Plan
+  id: string; materialId: string; materialName: string; thickness: number; orderNames: string[]; componentCount: number; plan: Plan; layoutSlot: number
 }
 export interface ProductionView { batches: ProductionBatch[]; orders: ProductionOrderView[]; updatedAt: string }
 export interface ShopifyStatus {

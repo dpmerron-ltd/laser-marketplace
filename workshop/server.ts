@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from '
 import { resolve, join, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
-import type { JobRequest } from '../src/laser/model'
+import { deadSpaceSchema, type JobRequest } from '../src/laser/model'
 import { ShopifySync } from './shopifySync'
 import { prepareCatalogueOrder } from './catalogueOrders'
 import { WorkshopStore, type Action } from './store'
@@ -36,7 +36,7 @@ export function createWorkshopServer(store: WorkshopStore, port: number, webRoot
       if (parts[0] === 'workspace') {
         if (req.method === 'GET') { send(200, sync.production.catalogue.read()); return }
         if (req.method === 'PUT') {
-          const workspace = sync.production.catalogue.save(await body(req))
+          const workspace = sync.production.saveCatalogue(await body(req))
           sync.production.view() // Retry held SKUs and rebuild pending beds using the newly saved library.
           send(200, workspace); return
         }
@@ -48,6 +48,10 @@ export function createWorkshopServer(store: WorkshopStore, port: number, webRoot
       }
       if (parts[0] === 'production') {
         if (req.method === 'GET' && parts.length === 1) { send(200, sync.production.view()); return }
+        if (req.method === 'PUT' && parts[1] === 'batches' && parts[3] === 'sheets' && parts[5] === 'dead-spaces' && parts.length === 6) {
+          const input = z.object({ zones: z.array(deadSpaceSchema).max(50) }).parse(await body(req))
+          send(200, sync.production.setDeadSpaces(parts[2], z.coerce.number().int().min(1).max(1000).parse(parts[4]), input.zones)); return
+        }
         if (req.method === 'POST' && parts[1] === 'batches' && parts[3] === 'release' && parts.length === 4) {
           await body(req)
           await sync.sync() // Refresh eligibility before freezing an order onto a production job.

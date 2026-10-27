@@ -32,13 +32,31 @@ export const materialSchema = z.object({
   spacing: z.number().finite().min(0.1).max(500), grainLocked: z.boolean(),
   cut: operationSchema, score: operationSchema, notes: z.string().max(4000),
 })
+export const deadSpaceSchema = z.object({
+  id, label: name,
+  x: z.number().finite().min(0).max(10000), y: z.number().finite().min(0).max(10000),
+  width: mm, height: mm,
+})
+export const sheetDeadSpacesSchema = z.array(z.object({
+  sheetNumber: z.number().int().min(1).max(1000), zones: z.array(deadSpaceSchema).max(50),
+})).max(100).superRefine((sheets, ctx) => {
+  if (new Set(sheets.map(s => s.sheetNumber)).size !== sheets.length) ctx.addIssue({ code: 'custom', message: 'Dead space sheet numbers must be unique' })
+  if (sheets.reduce((n, s) => n + s.zones.length, 0) > 500) ctx.addIssue({ code: 'custom', message: 'A batch is limited to 500 dead spaces' })
+  for (const sheet of sheets) if (new Set(sheet.zones.map(z => z.id)).size !== sheet.zones.length) ctx.addIssue({ code: 'custom', message: 'Dead space IDs must be unique on each sheet' })
+})
 export const requestSchema = z.object({
   reference: name, machine: machineSchema, material: materialSchema,
+  sheetDeadSpaces: sheetDeadSpacesSchema.optional(),
   lines: z.array(z.object({ design: designSchema, quantity: z.number().int().min(1).max(200), order: name })).min(1).max(100),
 }).superRefine((v, ctx) => {
   if (v.lines.reduce((n, l) => n + l.quantity, 0) > 500) ctx.addIssue({ code: 'custom', message: 'A batch is limited to 500 components' })
   if (v.lines.reduce((n, l) => n + l.design.paths.reduce((s, p) => s + p.points.length, 0), 0) > 50000) ctx.addIssue({ code: 'custom', message: 'Batch source geometry exceeds 50,000 points' })
+  for (const sheet of v.sheetDeadSpaces ?? []) for (const zone of sheet.zones) {
+    if (zone.x + zone.width > v.material.sheetWidth || zone.y + zone.height > v.material.sheetHeight) ctx.addIssue({ code: 'custom', message: `Dead space ${zone.label} on sheet ${sheet.sheetNumber} extends outside the stock sheet` })
+  }
 })
+export type DeadSpace = z.infer<typeof deadSpaceSchema>
+export type SheetDeadSpaces = z.infer<typeof sheetDeadSpacesSchema>
 export type Point = z.infer<typeof pointSchema>
 export type VectorPath = z.infer<typeof pathSchema>
 export type Design = z.infer<typeof designSchema>
@@ -48,7 +66,7 @@ export type Settings = z.infer<typeof operationSchema>
 export type JobRequest = z.infer<typeof requestSchema>
 export interface PlannedPath { id: string; instanceId: string; operation: 'cut' | 'score'; points: Point[]; closed: boolean; depth: number; settings: Settings }
 export interface Placement { id: string; sku: string; name: string; order: string; designId: string; revision: number; x: number; y: number; width: number; height: number; rotated: boolean }
-export interface Sheet { number: number; width: number; height: number; placements: Placement[]; paths: PlannedPath[]; travelMm: number; cutMm: number; estimatedSeconds: number }
+export interface Sheet { number: number; width: number; height: number; deadSpaces?: DeadSpace[]; placements: Placement[]; paths: PlannedPath[]; travelMm: number; cutMm: number; estimatedSeconds: number }
 export interface Plan { schema: 'laser-plan/v1'; plannerVersion: string; request: JobRequest; sheets: Sheet[]; warnings: string[] }
 export type SheetState = 'ready' | 'transferring' | 'staged' | 'running' | 'awaiting_inspection' | 'complete' | 'needs_reconciliation' | 'cancelled'
 export interface SheetStatus { number: number; state: SheetState; accepted: string[]; rejected: string[]; receipt?: string }

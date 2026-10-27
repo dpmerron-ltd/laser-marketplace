@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildArtifacts } from '../src/laser/artifacts'
-import { canonical, type Design, type JobRequest, type Material, type QueueJob } from '../src/laser/model'
+import { canonical, type DeadSpace, type Design, type JobRequest, type Material, type QueueJob, type SheetDeadSpaces } from '../src/laser/model'
+import { layoutSheets, withSheetDeadSpaces } from '../src/laser/deadSpace'
+import { parseWorkspace } from '../src/laser/workspace'
 import { planJob } from '../src/laser/planner'
 import type { ProductionBatch, ProductionOrderView, ProductionView } from '../src/laser/productionTypes'
 import { atomicJson, Catalogue } from './catalogue'
@@ -15,8 +17,8 @@ const fingerprint = (o: SourceOrder) => digest({ cancelledAt: o.cancelledAt, clo
 interface Allocation { orderKey: string; lineId: string; quantity: number }
 interface Reservation extends Allocation { jobId: string; fingerprint: string }
 interface RecordEntry { order: SourceOrder; unavailable: boolean }
-interface ReleaseIntent { batchId: string; request: JobRequest; allocations: Allocation[]; fingerprints: Record<string, string> }
-interface State { schema: 1; generation: number; records: Record<string, RecordEntry>; reservations: Reservation[]; releases: Record<string, string>; intent?: ReleaseIntent }
+interface ReleaseIntent { batchId: string; request: JobRequest; allocations: Allocation[]; fingerprints: Record<string, string>; layoutSlot?: number }
+interface State { schema: 1; generation: number; records: Record<string, RecordEntry>; reservations: Reservation[]; releases: Record<string, string>; layouts: Record<string, SheetDeadSpaces[]>; intent?: ReleaseIntent }
 interface Draft extends ProductionBatch { allocations: Allocation[] }
 function eligibility(order: SourceOrder): string | null {
   if (order.test) return 'Test order — excluded from automatic production'
@@ -34,9 +36,20 @@ export class ProductionStore {
     this.file = join(store.root, 'production.json'); this.catalogue = new Catalogue(store.root)
     this.state = existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) : { schema: 1, generation: 1, records: {}, reservations: [], releases: {} }
     if (this.state.schema !== 1 || !Array.isArray(this.state.reservations) || !this.state.records || !this.state.releases) throw new Error('Production ledger is invalid; restore it from a backup before syncing')
+    this.state.layouts ??= {}
     this.recoverRelease()
   }
   private save() { atomicJson(this.file, this.state) }
+  saveCatalogue(value: unknown) {
+    const workspace = parseWorkspace(value)
+    for (const [materialId, batches] of Object.entries(this.state.layouts)) {
+      const material = workspace.materials.find(m => m.id === materialId)
+      for (const sheets of batches) for (const sheet of sheets) for (const zone of sheet.zones) {
+        if (!material || zone.x + zone.width > material.sheetWidth || zone.y + zone.height > material.sheetHeight) throw new Error(`Update or remove pending dead space "${zone.label}" for ${materialId} before removing or shrinking its stock sheet`)
+      }
+    }
+    return this.catalogue.save(workspace)
+  }
   tracksJob(jobId: string): boolean {
     const visited = new Set<string>()
     while (jobId && !visited.has(jobId)) { visited.add(jobId); if (this.state.reservations.some(r => r.jobId === jobId)) return true; jobId = this.store.get(jobId).sourceJobId ?? '' }
@@ -71,6 +84,7 @@ export class ProductionStore {
     if (!this.state.releases[intent.batchId]) {
       this.state.reservations.push(...intent.allocations.map(a => ({ ...a, jobId: job.id, fingerprint: intent.fingerprints[a.orderKey] })))
       this.state.releases[intent.batchId] = job.id
+      if (intent.layoutSlot !== undefined) this.state.layouts[intent.request.material.id]?.splice(intent.layoutSlot, 1)
     }
     delete this.state.intent; this.save()
   }
@@ -82,13 +96,18 @@ export class ProductionStore {
     if (retained.length !== this.state.reservations.length) { this.state.reservations = retained; this.state.generation++; this.save() }
     const groups = new Map<string, { material: Material; lines: JobRequest['lines']; allocations: Allocation[]; vertices: number; sourceVertices: number; count: number }>()
     const desiredHolds = new Map<string, Record<string, string>>()
+    const materialSlots = new Map<string, number>()
     const flush = (id: string) => {
       const group = groups.get(id)
       if (!group?.lines.length || !workspace) return
       const request: JobRequest = { reference: `Shopify · ${group.material.name}`.slice(0, 160), machine: workspace.machine, material: group.material, lines: group.lines }
+      const layoutSlot = materialSlots.get(id) ?? 0
+      materialSlots.set(id, layoutSlot + 1)
+      const layout = this.state.layouts[id]?.[layoutSlot]
+      if (layout?.length) request.sheetDeadSpaces = layout
       const plan = planJob(request); buildArtifacts(plan)
       const batchId = digest({ generation: this.state.generation, request, allocations: group.allocations })
-      batches.push({ id: batchId, materialId: id, materialName: group.material.name, thickness: group.material.thickness, componentCount: group.count, orderNames: [...new Set(group.lines.map(l => l.order))], plan, allocations: group.allocations })
+      batches.push({ id: batchId, materialId: id, materialName: group.material.name, thickness: group.material.thickness, componentCount: group.count, orderNames: [...new Set(group.lines.map(l => l.order))], plan, allocations: group.allocations, layoutSlot })
       groups.delete(id)
     }
     let plannedCount = 0, plannedVertices = 0
@@ -167,12 +186,26 @@ export class ProductionStore {
     const result = this.drafts()
     return { batches: result.batches.map(({ allocations: _allocations, ...batch }) => batch), orders: result.orders, updatedAt: new Date().toISOString() }
   }
+  setDeadSpaces(batchId: string, sheetNumber: number, zones: DeadSpace[]): ProductionView {
+    this.recoverRelease()
+    const draft = this.drafts().batches.find(b => b.id === batchId)
+    if (!draft) throw new Error('This draft bed changed. Refresh the production beds before editing it.')
+    if (!layoutSheets(draft.plan).some(s => s.number === sheetNumber)) throw new Error('This sheet is not in the draft batch')
+    const plan = planJob(withSheetDeadSpaces(draft.plan.request, sheetNumber, zones))
+    buildArtifacts(plan) // Validate and compile before changing the persistent draft.
+    const layouts = this.state.layouts[draft.materialId] ?? []
+    while (layouts.length <= draft.layoutSlot) layouts.push([])
+    layouts[draft.layoutSlot] = plan.request.sheetDeadSpaces ?? []
+    this.state.layouts[draft.materialId] = layouts
+    this.save()
+    return this.view()
+  }
   release(batchId: string): QueueJob {
     this.recoverRelease()
     if (this.state.releases[batchId]) return this.store.get(this.state.releases[batchId])
     const draft = this.drafts().batches.find(b => b.id === batchId)
     if (!draft) throw new Error('This draft bed changed. Refresh the production beds before releasing it.')
-    this.state.intent = { batchId, request: draft.plan.request, allocations: draft.allocations, fingerprints: Object.fromEntries(draft.allocations.map(a => [a.orderKey, fingerprint(this.state.records[a.orderKey].order)])) }
+    this.state.intent = { batchId, request: draft.plan.request, allocations: draft.allocations, fingerprints: Object.fromEntries(draft.allocations.map(a => [a.orderKey, fingerprint(this.state.records[a.orderKey].order)])), layoutSlot: draft.layoutSlot }
     this.save(); this.recoverRelease()
     return this.store.get(this.state.releases[batchId])
   }

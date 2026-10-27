@@ -138,7 +138,9 @@ export class WorkshopStore {
     const rejected = source.sheets.flatMap(s => s.rejected)
     if (!rejected.length) throw new Error('No rejected components need replacement')
     const lines = plan.request.lines.flatMap((line, i) => { const quantity = rejected.filter(p => p.startsWith(`line-${i + 1}-part-`)).length; return quantity ? [{ ...line, quantity }] : [] })
-    const replacement = this.prepare({ ...plan.request, reference: `${plan.request.reference.slice(0, 140)} replacements`, lines }, `replacement-${id}`)
+    // Replacement stock is a new set of physical sheets; original defects do not carry over.
+    const { sheetDeadSpaces: _originalSheetDefects, ...request } = plan.request
+    const replacement = this.prepare({ ...request, reference: `${plan.request.reference.slice(0, 140)} replacements`, lines }, `replacement-${id}`)
     if (!replacement.sourceJobId) { replacement.sourceJobId = id; this.save(replacement) }
     return replacement
   }

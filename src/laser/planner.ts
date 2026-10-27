@@ -1,4 +1,5 @@
-import { MaxRectsPacker, Rectangle } from 'maxrects-packer'
+import { Rectangle } from 'maxrects-packer'
+import { nestRectangles, separated } from './deadSpace'
 import { bounds, distance, inside, offset, validatePaths } from './geometry'
 import { requestSchema, type JobRequest, type Plan, type PlannedPath, type Point } from './model'
 
@@ -27,23 +28,19 @@ export function planJob(input: JobRequest): Plan {
     const box = bounds(compensated.flatMap(p => p.points))
     return { line, lineIndex, paths: compensated, box }
   })
-  const packer = new MaxRectsPacker<Rectangle>(material.sheetWidth - material.margin * 2, material.sheetHeight - material.margin * 2, material.spacing, { smart: false, pot: false, square: false, allowRotation: false })
   const rectangles = prepared.flatMap(part => Array.from({ length: part.line.quantity }, (_, copy) => {
     const r = new Rectangle(Math.max(Math.ceil((part.box.width - 1e-8) * 1000) / 1000, .001), Math.max(Math.ceil((part.box.height - 1e-8) * 1000) / 1000, .001), 0, 0, false, part.line.design.allowRotation && !material.grainLocked)
-    // MaxRects checks unrotated bounds before considering per-rectangle rotation.
-    // Pre-rotate only when this is the sole orientation that fits the empty bin.
-    if (r.allowRotation && (r.width > packer.width || r.height > packer.height) && r.height <= packer.width && r.width <= packer.height) r.rot = true
     r.data = { part, id: `line-${part.lineIndex + 1}-part-${copy + 1}` }
     return r
   }))
-  packer.addArray(rectangles)
-  if (rectangles.some(r => r.oversized)) throw new Error('A component does not fit the usable stock sheet with its rotation restrictions')
+  const bins = nestRectangles(rectangles, material, request.sheetDeadSpaces)
   let vertices = 0
-  const sheets = packer.bins.map((bin, sheetIndex) => {
+  const sheets = bins.map(({ bin, number, zones }) => {
     const paths: PlannedPath[] = []
     const placements = bin.rects.map(rect => {
       const { part, id } = rect.data as { part: typeof prepared[number]; id: string }
       const { box, line } = part, x = rect.x + material.margin, y = rect.y + material.margin
+      if (zones.some(zone => !separated({ x, y, width: rect.width, height: rect.height }, zone, material.spacing))) throw new Error('A component overlaps sheet dead space or its clearance')
       const transform = (p: Point): Point => rect.rot ? { x: x + box.height - (p.y - box.minY), y: y + p.x - box.minX } : { x: x + p.x - box.minX, y: y + p.y - box.minY }
       for (const path of part.paths) {
         if (path.operation === 'ignore') continue
@@ -65,7 +62,7 @@ export function planJob(input: JobRequest): Plan {
       cutMm += length; estimatedSeconds += length / path.settings.speedMmS
       cursor = path.closed ? path.points[0] : path.points.at(-1)!
     }
-    return { number: sheetIndex + 1, width: material.sheetWidth, height: material.sheetHeight, placements, paths, travelMm, cutMm, estimatedSeconds }
+    return { number, width: material.sheetWidth, height: material.sheetHeight, deadSpaces: zones, placements, paths, travelMm, cutMm, estimatedSeconds }
   })
-  return { schema: 'laser-plan/v1', plannerVersion: '1.0.0', request, sheets, warnings: ['Rectangular nesting; parts are not nested inside holes.', 'Time is beam-on travel only; acceleration, positioning and handling add time.', ...(machine.controller === 'ruida-rd' ? ['Experimental Ruida RD export. Controller model, origin and settings require commissioning. Live transfer is disabled.'] : ['Simulation: staging and run records do not operate a laser.'])] }
+  return { schema: 'laser-plan/v1', plannerVersion: '1.1.0', request, sheets, warnings: ['Rectangular nesting; parts are not nested inside holes.', ...(request.sheetDeadSpaces?.some(s => s.zones.length) ? ['Dead space is specific to the numbered physical sheet. Empty sheets are skipped; sheet numbers are preserved. Laser-off travel can cross dead space.'] : []), 'Time is beam-on travel only; acceleration, positioning and handling add time.', ...(machine.controller === 'ruida-rd' ? ['Experimental Ruida RD export. Controller model, origin and settings require commissioning. Live transfer is disabled.'] : ['Simulation: staging and run records do not operate a laser.'])] }
 }

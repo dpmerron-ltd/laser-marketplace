@@ -23,6 +23,54 @@ function workspace() {
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'laser-production-')); store = new WorkshopStore(root); production = new ProductionStore(store); production.catalogue.save(workspace()) })
 afterEach(() => { rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
 describe('Shopify orders to material beds', () => {
+  it('keeps sheet defects through automatic refills and restart, then freezes and consumes them on release', () => {
+    const first = production.ingest(shop, [order()]).batches[0]
+    const zones = [{ id: 'cutout', label: 'Old cutout', x: 10, y: 10, width: 170, height: 100 }]
+    const edited = production.setDeadSpaces(first.id, 1, zones).batches[0]
+    expect(edited.id).not.toBe(first.id)
+    expect(() => production.release(first.id)).toThrow('changed')
+    expect(() => production.setDeadSpaces(first.id, 1, [])).toThrow('changed')
+    const shrunk = workspace(); shrunk.materials[0].sheetWidth = 100
+    expect(() => production.saveCatalogue(shrunk)).toThrow('dead space')
+    expect(production.catalogue.read()!.materials[0].sheetWidth).toBe(600)
+    const refilled = production.ingest(shop, [order('2')]).batches[0]
+    expect(refilled.componentCount).toBe(8)
+    expect(refilled.plan.sheets[0].deadSpaces).toEqual(zones)
+    const restarted = new ProductionStore(new WorkshopStore(root))
+    const draft = restarted.view().batches[0]
+    expect(draft.plan).toEqual(refilled.plan)
+    expect(() => restarted.setDeadSpaces(draft.id, 1, [{ ...zones[0], x: 599 }])).toThrow('outside')
+    expect(restarted.view().batches[0].id).toBe(draft.id)
+    const job = restarted.release(draft.id)
+    expect(store.plan(job.id)).toEqual(draft.plan)
+    expect(restarted.release(draft.id).id).toBe(job.id)
+    expect(restarted.ingest(shop, [order('3')]).batches[0].plan.request.sheetDeadSpaces).toBeUndefined()
+  })
+  it('preserves later material batch layouts when an earlier batch is released', () => {
+    const initial = production.ingest(shop, [order('1', 'PLY3', 600)]).batches
+    expect(initial).toHaveLength(2)
+    const zones = [{ id: 'second', label: 'Second batch defect', x: 10, y: 10, width: 100, height: 100 }]
+    production.setDeadSpaces(initial[1].id, 1, zones)
+    const first = production.view().batches[0]
+    production.release(first.id)
+    const remaining = production.view().batches[0]
+    expect(remaining.componentCount).toBe(100)
+    expect(remaining.plan.request.sheetDeadSpaces?.[0].zones).toEqual(zones)
+    expect(store.plan(production.release(remaining.id).id)).toEqual(remaining.plan)
+  })
+  it('recovers dead spaces and their consumption after an interrupted release', () => {
+    const initial = production.ingest(shop, [order()]).batches[0]
+    const draft = production.setDeadSpaces(initial.id, 1, [{ id: 'whole', label: 'Unusable sheet', x: 0, y: 0, width: 600, height: 400 }]).batches[0]
+    const prepare = store.prepare.bind(store)
+    vi.spyOn(store, 'prepare').mockImplementationOnce((request, key) => { prepare(request, key); throw new Error('interrupted') })
+    expect(() => production.release(draft.id)).toThrow('interrupted')
+    const restarted = new ProductionStore(new WorkshopStore(root))
+    const job = store.list()[0]
+    expect(job.sheets[0].number).toBe(2)
+    expect(store.plan(job.id)).toEqual(draft.plan)
+    expect(restarted.view().batches).toEqual([])
+    expect(restarted.ingest(shop, [order('2')]).batches[0].plan.request.sheetDeadSpaces).toBeUndefined()
+  })
   it('combines matching orders on one bed and separates all four materials', () => {
     const result = production.ingest(shop, [order('1'), order('2'), order('3', 'PLY6'), order('4', 'MDF3'), order('5', 'MDF6')])
     expect(result.batches).toHaveLength(4)

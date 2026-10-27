@@ -5,6 +5,7 @@ import type { Machine, Sheet } from './model'
 export default function SheetPreview({ sheet, machine, decoded = false, savedDecoded }: { sheet: Sheet; machine: Machine; decoded?: boolean; savedDecoded?: string }) {
   const svg = useMemo(() => {
     if (!decoded) return previewSvg(sheet)
+    if (!sheet.paths.length) return decodedSvg([], machine.bedWidth, machine.bedHeight)
     if (savedDecoded) return savedDecoded
     return decodedSvg(compileSheet(sheet, machine).decoded, machine.bedWidth, machine.bedHeight)
   }, [sheet, machine, decoded, savedDecoded])

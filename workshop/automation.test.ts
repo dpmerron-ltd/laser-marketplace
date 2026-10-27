@@ -30,8 +30,16 @@ it('runs Shopify intake through HTTP, nests matched SKUs and freezes a productio
     workspace.designs = [{ ...demoDesign, sku: 'PLY3', approved: true, materialId: 'plywood-3mm' }]
     expect((await call('workspace', 'PUT', workspace)).status).toBe(200)
     expect((await call('shopify/sync', 'POST', {})).status).toBe(200)
-    const production = (await call('production')).data
+    let production = (await call('production')).data
     expect(production.batches).toHaveLength(1); expect(production.batches[0].componentCount).toBe(4)
+    const originalId = production.batches[0].id
+    const zones = [{ id: 'knot', label: 'Knot', x: 10, y: 10, width: 70, height: 80 }]
+    const edited = await call(`production/batches/${originalId}/sheets/1/dead-spaces`, 'PUT', { zones })
+    expect(edited.status).toBe(200)
+    production = edited.data
+    expect(production.batches[0].plan.sheets[0].deadSpaces).toEqual(zones)
+    expect((await call(`production/batches/${originalId}/release`, 'POST', {})).status).toBe(400)
+    expect((await call(`production/batches/${production.batches[0].id}/sheets/1/dead-spaces`, 'PUT', { zones: [{ ...zones[0], width: -1 }] })).status).toBe(400)
     const released = await call(`production/batches/${production.batches[0].id}/release`, 'POST', {})
     expect(released.status).toBe(201)
     expect((await call('production')).data.batches).toHaveLength(0)

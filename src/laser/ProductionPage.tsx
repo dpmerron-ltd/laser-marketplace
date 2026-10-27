@@ -4,6 +4,8 @@ import { workshopApi as api } from './client'
 import type { ProductionView, ShopifyStatus } from './productionTypes'
 import type { QueueJob } from './model'
 import SheetPreview from './SheetPreview'
+import DeadSpaceEditor from './DeadSpaceEditor'
+import { layoutSheets } from './deadSpace'
 
 interface Props { online: boolean; busy: boolean; run: (action: () => Promise<void>) => Promise<void>; onReleased: (job: QueueJob) => Promise<void>; onOpenJob: (id: string) => Promise<void>; onSaveCatalogue: () => Promise<void> }
 export default function ProductionPage({ online, busy, run, onReleased, onOpenJob, onSaveCatalogue }: Props) {
@@ -28,9 +30,22 @@ export default function ProductionPage({ online, busy, run, onReleased, onOpenJo
     <div className="laser-production-summary"><strong>{view?.batches.reduce((n, b) => n + b.plan.sheets.length, 0) ?? 0} draft beds</strong><span>{view?.orders.filter(o => o.status === 'on_bed').length ?? 0} orders on beds</span><span>{view?.orders.filter(o => o.status === 'held').length ?? 0} orders held for review</span></div>
     {!view?.batches.length && <div className="laser-empty"><h2>No draft beds waiting</h2><p>Approved SKU matches will arrive here automatically. Orders with missing drawings, material assignments or cutting settings appear in the review list below.</p></div>}
     {view?.batches.map(batch => {
-      const sheet = batch.plan.sheets.find(s => s.number === sheetChoices[batch.id]) ?? batch.plan.sheets[0]
+      const layoutKey = `${batch.materialId}-${batch.layoutSlot}`
+      const sheets = layoutSheets(batch.plan), sheet = sheets.find(s => s.number === sheetChoices[layoutKey]) ?? sheets[0]
       return <section className="laser-card laser-production-batch" key={batch.id}><div className="laser-title"><div><span className="laser-eyebrow">DRAFT · FILLS AUTOMATICALLY</span><h2>{batch.materialName}</h2><p>{batch.componentCount} components · {batch.plan.sheets.length} beds · {batch.orderNames.join(', ')}</p></div><button className="primary" disabled={busy || !status?.configured || status.syncing} onClick={() => void run(async () => { const job = await api<QueueJob>(`production/batches/${batch.id}/release`, 'POST', {}); await onReleased(job); await reload() })}>Release {batch.plan.sheets.length === 1 ? 'bed' : `${batch.plan.sheets.length} beds`} to queue</button></div>
-        <div className="laser-toolbar"><label className="laser-field"><span>Production bed</span><select value={sheet.number} onChange={e => setSheetChoices(v => ({ ...v, [batch.id]: Number(e.target.value) }))}>{batch.plan.sheets.map(s => <option key={s.number} value={s.number}>Bed {s.number} · {s.placements.length} components</option>)}</select></label><span>{sheet.width} × {sheet.height} mm · {batch.thickness} mm stock</span></div><SheetPreview sheet={sheet} machine={batch.plan.request.machine}/><p className="laser-muted">New orders can fill these draft beds. Release freezes this batch and its files; no laser motion is started.</p>
+        <div className="laser-toolbar"><label className="laser-field"><span>Production bed</span><select value={sheet.number} onChange={e => setSheetChoices(v => ({ ...v, [layoutKey]: Number(e.target.value) }))}>{sheets.map(s => <option key={s.number} value={s.number}>Bed {s.number} · {s.placements.length ? `${s.placements.length} components` : 'unused — no cutting file'}</option>)}</select></label><span>{sheet.width} × {sheet.height} mm · {batch.thickness} mm stock</span></div><SheetPreview sheet={sheet} machine={batch.plan.request.machine}/>
+        <DeadSpaceEditor key={`${batch.id}-${sheet.number}`} sheet={sheet} spacing={batch.plan.request.material.spacing} busy={busy || !!status?.syncing} onChange={async zones => {
+          let failure: unknown
+          await run(async () => {
+            try {
+              const next = await api<ProductionView>(`production/batches/${batch.id}/sheets/${sheet.number}/dead-spaces`, 'PUT', { zones })
+              setSheetChoices(v => ({ ...v, [layoutKey]: sheet.number }))
+              setView(next)
+            } catch (e) { failure = e; throw e }
+          })
+          if (failure) throw failure
+        }}/>
+        <p className="laser-muted">New orders can fill these draft beds while keeping their dead spaces. Release freezes this batch and its files; no laser motion is started.</p>
       </section>
     })}
     <section className="laser-card laser-order-inbox"><h2>Shopify order tracking</h2>{!view?.orders.length ? <p className="laser-muted">No orders have been synced yet.</p> : view.orders.map(order => <article key={order.key} className="laser-order-record"><div className="laser-toolbar"><strong>{order.name}</strong><span className={'laser-badge ' + (['on_bed', 'released'].includes(order.status) ? 'approved' : '')}>{order.status.replaceAll('_', ' ')}</span><span>{order.shop}</span></div><p>{order.lines.map(l => `${l.sku || 'Missing SKU'} × ${l.quantity}${l.allocated ? ` (${l.allocated} released)` : ''}`).join(' · ')}</p>{order.issues.map(issue => <p key={issue} className="laser-muted">{issue}</p>)}

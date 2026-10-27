@@ -29,7 +29,9 @@ describe('durable jobs and lifecycle', async () => {
     expect(store.get(job.id).sheets[0].state).toBe('ready')
   })
   it('never marks parts accepted merely because a file was staged or a run finished', async () => {
-    const job = store.prepare(fixture(), 'order-1')
+    const input = fixture()
+    input.sheetDeadSpaces = [{ sheetNumber: 1, zones: [{ id: 'cutout', label: 'Old cutout', x: 10, y: 10, width: 70, height: 70 }] }]
+    const job = store.prepare(input, 'order-1')
     await expect(store.act(job.id, 1, { action: 'record-start', note: 'loaded' })).rejects.toThrow('ready')
     await store.act(job.id, 1, { action: 'stage' })
     expect(store.get(job.id).sheets[0].accepted).toEqual([])
@@ -42,6 +44,8 @@ describe('durable jobs and lifecycle', async () => {
     await store.act(job.id, 1, { action: 'inspect', note: 'Second tag failed inspection', accepted: [ids[0]], rejected: [ids[1]] })
     const replacement = store.replacements(job.id)
     expect(store.plan(replacement.id).request.lines[0].quantity).toBe(1)
+    expect(store.plan(replacement.id).request.sheetDeadSpaces).toBeUndefined()
+    expect(store.plan(job.id).request.sheetDeadSpaces).toEqual(input.sheetDeadSpaces)
     expect(store.replacements(job.id).id).toBe(replacement.id)
     expect(store.get(job.id).sheets[0].state).toBe('complete')
   })

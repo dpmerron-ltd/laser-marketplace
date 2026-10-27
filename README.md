@@ -1,13 +1,14 @@
 # Laser Marketplace
 
-A separate local fork of `cnc-marketplace` for generating laser cut files. The primary app now uses controller-independent vector geometry, with a local workshop queue. LightBurn is not required.
+A separate fork of `cnc-marketplace` for generating laser cut files. The primary app now uses controller-independent vector geometry, with a local workshop queue. LightBurn is not required.
 
 ## Run
 
 Use Node.js 22.12 or newer. No cloud account or Supabase configuration is needed for the laser workflow.
 
 ```bash
-cd /Users/danmerron/Desktop/work/laser-marketplace
+git clone https://github.com/dpmerron-ltd/laser-marketplace.git
+cd laser-marketplace
 npm ci
 npm run build
 npm run workshop
@@ -58,6 +59,6 @@ The optional independent Ruida decode procedure is in [CONTROLLERS.md](docs/CONT
 
 ## Fork independence
 
-This folder is its own Git repository with the original history. No GitHub repository has been created or published. The original repository is an `upstream` remote with pushing disabled; the original CNC workspace is unchanged. App/storage identifiers use the Laser Marketplace name. Deployment workflows remain manual.
+This project has its own [GitHub repository](https://github.com/dpmerron-ltd/laser-marketplace) with the original history. In the local development fork, `origin` points to this laser repository and the original CNC repository is an `upstream` remote with pushing disabled; the original CNC workspace is unchanged. App/storage identifiers use the Laser Marketplace name. Deployment workflows remain manual.
 
 The inherited CNC implementation remains in source for reference and its tests still run, but `src/main.tsx` opens the new laser app. The legacy Supabase `cnc-api` is not a laser endpoint. Its configuration and documentation are retained in [API.md](docs/API.md) and [CNC_BASELINE.md](docs/CNC_BASELINE.md). Original credentials were not copied into this fork.
